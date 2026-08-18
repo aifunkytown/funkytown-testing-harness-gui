@@ -9,10 +9,11 @@ build and run a model-comparison test config without hand-editing JSON.
 This project imports `funkytown_testing_harness` directly rather than
 installing it as a package, so it expects that project checked out as a
 **sibling directory** next to this one (which in turn expects
-`comfy-prompt-tools` as its own sibling):
+`comfy-prompt-tools` as its own sibling). The parent folder can be
+named/located anything you like - only the sibling relationship matters:
 
 ```
-Claude Projects/
+your-workspace/
 ├── comfy-prompt-tools/
 ├── funkytown-testing-harness/
 └── funkytown-testing-harness-gui/

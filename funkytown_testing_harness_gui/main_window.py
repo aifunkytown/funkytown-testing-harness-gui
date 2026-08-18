@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
 
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings
+from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
 from funkytown_testing_harness_gui.model_config_dialog import ModelConfigDialog
 from funkytown_testing_harness_gui.runner_thread import TestRunnerThread
 from funkytown_testing_harness_gui.settings_dialog import SettingsDialog
@@ -55,6 +56,8 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()
         self._models = {}  # model_name -> list[dict] (configs)
         self._runner_thread = None
+        self._ksampler_defaults = {}  # populated from the referenced workflow when possible
+        self._defaults_thread = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -131,6 +134,7 @@ class MainWindow(QMainWindow):
         row.addWidget(QLabel("Source workflow:"))
         self.workflow_combo = QComboBox()
         self.workflow_combo.setEditable(True)
+        self.workflow_combo.activated.connect(lambda _index: self._refresh_ksampler_defaults())
         row.addWidget(self.workflow_combo, 1)
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self._refresh_workflow_list)
@@ -162,6 +166,37 @@ class MainWindow(QMainWindow):
                 self.workflow_combo.setCurrentIndex(idx)
             else:
                 self.workflow_combo.setEditText(current)
+        self._refresh_ksampler_defaults()
+
+    def _refresh_ksampler_defaults(self):
+        """Pull sampler/steps/cfg/scheduler from the currently-referenced
+        workflow's own KSampler node, in the background, for use as the
+        starting values in the "Add Model" dialog. Falls back to
+        KSamplerConfigRow.FALLBACK_DEFAULTS if this fails or hasn't
+        completed yet."""
+        source_workflow = self.workflow_combo.currentText().strip()
+        if not source_workflow:
+            self._ksampler_defaults = {}
+            return
+        if self._defaults_thread is not None and self._defaults_thread.isRunning():
+            # Don't drop the still-running thread's only Python reference by
+            # reassigning self._defaults_thread out from under it - that can
+            # get it garbage-collected mid-flight. Whichever of the two
+            # requests finishes will still update _ksampler_defaults; the
+            # workflow selector's own change already implies the user can
+            # re-trigger a refresh (Refresh button, or picking it again).
+            return
+        self._defaults_thread = KSamplerDefaultsThread(self.settings["server"], source_workflow, self)
+        self._defaults_thread.result_ready.connect(self._on_ksampler_defaults_ready)
+        self._defaults_thread.start()
+
+    def _on_ksampler_defaults_ready(self, defaults):
+        self._ksampler_defaults = defaults
+        if defaults:
+            self._log(f"KSampler defaults from workflow: {defaults}")
+        else:
+            self._log("Could not read KSampler defaults from the workflow - new configs will start from "
+                       "cfg=1, steps=8, euler, beta.")
 
     # ---- models group -------------------------------------------------------
 
@@ -213,7 +248,10 @@ class MainWindow(QMainWindow):
         if not model_name:
             return
         initial = self._models.get(model_name, [{}])
-        dialog = ModelConfigDialog(model_name, self._sampler_names, self._schedulers, self, initial_configs=initial)
+        dialog = ModelConfigDialog(
+            model_name, self._sampler_names, self._schedulers, self,
+            initial_configs=initial, defaults=self._ksampler_defaults,
+        )
         if dialog.exec():
             self._models[model_name] = dialog.configs
             self._rebuild_models_list()
@@ -228,7 +266,8 @@ class MainWindow(QMainWindow):
         if model_name not in self._models:
             return
         dialog = ModelConfigDialog(
-            model_name, self._sampler_names, self._schedulers, self, initial_configs=self._models[model_name]
+            model_name, self._sampler_names, self._schedulers, self,
+            initial_configs=self._models[model_name], defaults=self._ksampler_defaults,
         )
         if dialog.exec():
             self._models[model_name] = dialog.configs

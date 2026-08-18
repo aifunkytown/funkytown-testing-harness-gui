@@ -25,29 +25,45 @@ from PySide6.QtWidgets import (
 
 
 class KSamplerConfigRow:
-    """One editable row of KSampler overrides, shown inside a QGroupBox."""
+    """One editable row of KSampler overrides, shown inside a QGroupBox.
+
+    The displayed starting values (before any override checkbox is ticked)
+    come from `defaults`, which is normally whatever the currently-referenced
+    workflow's own KSampler node already has - see
+    ksampler_defaults_thread.py. Any key missing from `defaults` (workflow
+    fetch failed, or that field wasn't present) falls back to
+    FALLBACK_DEFAULTS.
+    """
 
     FIELDS = ("sampler_name", "steps", "cfg", "scheduler", "seed", "denoise")
 
-    def __init__(self, sampler_names, schedulers):
+    FALLBACK_DEFAULTS = {"cfg": 1, "steps": 8, "sampler_name": "euler", "scheduler": "beta"}
+
+    def __init__(self, sampler_names, schedulers, defaults=None):
+        merged_defaults = {**self.FALLBACK_DEFAULTS, **(defaults or {})}
+
         self.box = QGroupBox()
         layout = QVBoxLayout(self.box)
 
         self.enabled_checks = {}
         self.widgets = {}
 
-        self._add_combo_row(layout, "sampler_name", "Sampler", sampler_names)
-        self._add_spin_row(layout, "steps", "Steps", minimum=1, maximum=200, default=20)
-        self._add_double_row(layout, "cfg", "CFG", minimum=0.0, maximum=30.0, default=7.0)
-        self._add_combo_row(layout, "scheduler", "Scheduler", schedulers)
+        self._add_combo_row(layout, "sampler_name", "Sampler", sampler_names, default=merged_defaults["sampler_name"])
+        self._add_spin_row(layout, "steps", "Steps", minimum=1, maximum=200, default=merged_defaults["steps"])
+        self._add_double_row(layout, "cfg", "CFG", minimum=0.0, maximum=30.0, default=merged_defaults["cfg"])
+        self._add_combo_row(layout, "scheduler", "Scheduler", schedulers, default=merged_defaults["scheduler"])
         self._add_spin_row(layout, "seed", "Seed", minimum=0, maximum=2**31 - 1, default=0)
         self._add_double_row(layout, "denoise", "Denoise", minimum=0.0, maximum=1.0, default=1.0)
 
-    def _add_combo_row(self, layout, key, label, options):
+    def _add_combo_row(self, layout, key, label, options, default=None):
         row = QHBoxLayout()
         check = QCheckBox(label)
         combo = QComboBox()
         combo.addItems(options)
+        if default is not None:
+            idx = combo.findText(str(default))
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
         combo.setEnabled(False)
         check.toggled.connect(combo.setEnabled)
         row.addWidget(check)
@@ -103,13 +119,14 @@ class ModelConfigDialog(QDialog):
     """Configure one model's KSampler config(s). Result available via
     .model_name and .configs after exec() returns QDialog.Accepted."""
 
-    def __init__(self, model_name, sampler_names, schedulers, parent=None, initial_configs=None):
+    def __init__(self, model_name, sampler_names, schedulers, parent=None, initial_configs=None, defaults=None):
         super().__init__(parent)
         self.setWindowTitle(f"Configure: {model_name}")
         self.setMinimumWidth(420)
         self.model_name = model_name
         self._sampler_names = sampler_names or ["euler"]
         self._schedulers = schedulers or ["normal"]
+        self._defaults = defaults or {}
         self._rows = []
 
         layout = QVBoxLayout(self)
@@ -136,7 +153,7 @@ class ModelConfigDialog(QDialog):
             self._add_row(config)
 
     def _add_row(self, initial=None):
-        row = KSamplerConfigRow(self._sampler_names, self._schedulers)
+        row = KSamplerConfigRow(self._sampler_names, self._schedulers, defaults=self._defaults)
         if initial:
             for key, value in initial.items():
                 if key in row.enabled_checks:
