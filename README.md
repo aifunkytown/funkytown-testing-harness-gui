@@ -29,6 +29,12 @@ project root - see "Launcher exe" below.
 
 ## What it does
 
+- **First-run setup** - until a ComfyUI installation folder is configured,
+  startup tries to infer one from a running ComfyUI server's own launch
+  arguments and asks you to confirm it; if it can't infer one (server not
+  running, or launched without `--base-directory`) or you say the guess is
+  wrong, it opens Settings for you to set it manually. Runs every launch
+  until something's actually configured.
 - **Workflow selector** - dropdown of workflow files found in your ComfyUI
   installation's `user/default/workflows` folder (configured in Settings),
   plus a Strip LoRAs checkbox and a positive-prompt override box.

@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 
 import funkytown_testing_harness
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from funkytown_testing_harness_gui import comfy_client
-from funkytown_testing_harness_gui.app_settings import load_settings
+from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
 from funkytown_testing_harness_gui.model_config_dialog import ModelConfigDialog
 from funkytown_testing_harness_gui.runner_thread import TestRunnerThread
@@ -84,6 +84,11 @@ class MainWindow(QMainWindow):
         self._refresh_model_dropdown()
         self._refresh_sampler_options()
 
+        if not self.settings.get("comfyui_install_dir"):
+            # Deferred so the main window is up and painted before a modal
+            # dialog pops in front of it, rather than appearing mid-construction.
+            QTimer.singleShot(0, self._first_run_prompt_install_dir)
+
     # ---- top bar (name, server status, settings) -------------------------
 
     def _build_top_bar(self):
@@ -123,6 +128,32 @@ class MainWindow(QMainWindow):
             self._refresh_workflow_list()
             self._refresh_model_dropdown()
             self._refresh_sampler_options()
+
+    def _first_run_prompt_install_dir(self):
+        """Runs once at startup while comfyui_install_dir isn't set yet (i.e.
+        every launch until it is). Tries to infer it from a running ComfyUI
+        server's own launch arguments and asks for confirmation; if that's
+        not possible (or the guess is wrong), sends the user to Settings."""
+        inferred = comfy_client.infer_comfyui_install_dir(self.settings["server"])
+        if inferred:
+            answer = QMessageBox.question(
+                self,
+                "ComfyUI installation folder",
+                f"Detected ComfyUI installation folder:\n\n{inferred}\n\nIs this correct?",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if answer == QMessageBox.Yes:
+                self.settings["comfyui_install_dir"] = inferred
+                save_settings(self.settings)
+                self._refresh_workflow_list()
+                return
+
+        QMessageBox.information(
+            self,
+            "ComfyUI installation folder needed",
+            "Set your ComfyUI installation folder so the workflow dropdown can find your saved workflows.",
+        )
+        self._open_settings()
 
     # ---- workflow group ----------------------------------------------------
 

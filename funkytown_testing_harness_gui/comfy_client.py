@@ -59,6 +59,23 @@ def check_server_reachable(server, timeout=4):
         return False
 
 
+def infer_comfyui_install_dir(server, timeout=5):
+    """Best-effort: ask a running ComfyUI server for its own --base-directory
+    launch argument via /system_stats (which echoes back sys.argv). Returns
+    None if the server's unreachable or wasn't launched with that flag -
+    there's no way to guess otherwise, this isn't filesystem guesswork."""
+    try:
+        with urllib.request.urlopen(f"{server}/system_stats", timeout=timeout) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        argv = data["system"]["argv"]
+        for i, arg in enumerate(argv):
+            if arg == "--base-directory" and i + 1 < len(argv):
+                return argv[i + 1]
+    except (urllib.error.URLError, KeyError, IndexError, TypeError, ValueError):
+        pass
+    return None
+
+
 def list_local_workflows(comfyui_install_dir):
     """Workflow filenames found in <install_dir>/user/default/workflows -
     read straight off disk, no server round-trip needed."""
