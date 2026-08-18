@@ -23,6 +23,9 @@ pip install PySide6
 python -m funkytown_testing_harness_gui.main
 ```
 
+Or just double-click **`Launch funkytown-testing-harness-gui.exe`** at the
+project root - see "Launcher exe" below.
+
 ## What it does
 
 - **Workflow selector** - dropdown of workflow files found in your ComfyUI
@@ -51,3 +54,31 @@ into the log panel at the bottom, the same messages the CLI would print.
 
 There's no pass/fail in any of this (see the harness project's README for
 why) - the GUI just makes it faster to build a config and watch it queue.
+
+## Launcher exe
+
+`Launch funkytown-testing-harness-gui.exe` at the project root is a **thin
+launcher**, not a bundled app - it doesn't contain any of the actual GUI
+code. Double-clicking it just finds a Python interpreter on PATH and runs
+`python -m funkytown_testing_harness_gui.main` from the project root, with no
+console window. Because none of the real code is baked into it, editing
+anything in this project, `funkytown-testing-harness`, or
+`comfy-prompt-tools` takes effect immediately, the next time you launch it -
+no rebuilding, ever, unless you change the launch logic itself
+(`launcher_src/launcher.py`).
+
+It does still need Python + PySide6 installed and on PATH on whatever machine
+runs it (same requirement as running the `.main` module directly) - it isn't
+portable to a machine without Python.
+
+### Rebuilding the launcher
+
+Only needed if you edit `launcher_src/launcher.py`:
+
+```bash
+pip install pyinstaller
+pyinstaller --onefile --noconsole --name "Launch funkytown-testing-harness-gui" --distpath . --workpath build --specpath build launcher_src/launcher.py
+```
+
+`build/` (PyInstaller's intermediate output) is gitignored; the resulting
+`.exe` at the project root is committed.
