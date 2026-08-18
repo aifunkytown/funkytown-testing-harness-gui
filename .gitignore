@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Local machine settings (server URL, local folder paths) and the config
+# written out right before each run - can carry real prompt text via
+# positive_prompt.
+gui_settings.json
+gui_last_run.json
+
+# Editor/OS cruft
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

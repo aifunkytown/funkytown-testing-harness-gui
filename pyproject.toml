@@ -1,0 +1,13 @@
+[project]
+name = "funkytown-testing-harness-gui"
+version = "0.1.0"
+description = "PySide6 desktop GUI for funkytown-testing-harness"
+requires-python = ">=3.10"
+dependencies = ["PySide6"]
+
+[tool.setuptools.packages.find]
+include = ["funkytown_testing_harness_gui*"]
+
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
