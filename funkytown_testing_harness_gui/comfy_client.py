@@ -35,6 +35,19 @@ def list_available_models(server):
     return sorted(models)
 
 
+def list_available_loras(server):
+    """LoRA filenames ComfyUI currently recognizes, via the standard
+    LoraLoader node's own object_info. This is every LoRA ComfyUI knows
+    about globally, not just ones already added as a slot in a particular
+    workflow's Power Lora Loader node - lora_test.py still validates that
+    separately when a run actually goes to use one."""
+    try:
+        info = _get_object_info(server, "LoraLoader")
+        return sorted(info["LoraLoader"]["input"]["required"]["lora_name"][0])
+    except (urllib.error.URLError, KeyError, IndexError, TypeError):
+        return []
+
+
 def list_sampler_names(server):
     try:
         info = _get_object_info(server, "KSampler")

@@ -12,7 +12,8 @@ dist/
 # written out right before each run - can carry real prompt text via
 # positive_prompt.
 gui_settings.json
-gui_last_run.json
+gui_last_model_run.json
+gui_last_lora_run.json
 
 # Editor/OS cruft
 .vscode/

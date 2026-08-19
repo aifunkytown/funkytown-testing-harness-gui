@@ -2,7 +2,8 @@
 
 A local-only desktop front end (PySide6/Qt) for
 [funkytown-testing-harness](https://github.com/aifunkytown/funkytown-testing-harness) -
-build and run a model-comparison test config without hand-editing JSON.
+build and run a model-comparison or LoRA-weight-sweep test config without
+hand-editing JSON.
 
 ## Setup
 
@@ -35,29 +36,43 @@ project root - see "Launcher exe" below.
   running, or launched without `--base-directory`) or you say the guess is
   wrong, it opens Settings for you to set it manually. Runs every launch
   until something's actually configured.
-- **Workflow selector** - dropdown of workflow files found in your ComfyUI
-  installation's `user/default/workflows` folder (configured in Settings),
-  plus a Strip LoRAs checkbox and a positive-prompt override box.
-- **Model dropdowns** - pick a model from a live-queried dropdown (from
-  ComfyUI's `/object_info`) and "Add to list" builds up the models-to-compare
-  list. Double-click (or "Edit selected...") an entry to open its config
-  window - check a field (sampler/steps/cfg/scheduler/seed/denoise) to
-  override it, leave it unchecked to use the workflow's own value, and add
-  multiple configs to run that model more than once.
+- **Workflow selector** (shared, top of the window) - dropdown of workflow
+  files found in your ComfyUI installation's `user/default/workflows` folder
+  (configured in Settings), plus a positive-prompt override box. The Strip
+  LoRAs checkbox only applies on the Models tab (it's disabled on the LoRA
+  tab, since a LoRA run needs those slots to stay present).
+- **Models tab** - pick a model from a live-queried dropdown (from ComfyUI's
+  `/object_info`) and "Add to list" builds up the models-to-compare list.
+  Double-click (or "Edit selected...") an entry to open its config window -
+  check a field (sampler/steps/cfg/scheduler/seed/denoise) to override it,
+  leave it unchecked to use the workflow's own value, and add multiple
+  configs to run that model more than once. "Run Model Test" runs it through
+  `funkytown_testing_harness.run_test.run()`.
+- **LoRA tab** - pick a single fixed model, optionally check "Combine LoRAs"
+  (run every LoRA together across the cartesian product of their weights,
+  instead of one at a time), then pick a LoRA from a live-queried dropdown
+  (from ComfyUI's `LoraLoader` node) and "Add to list" to give it a list of
+  weights to sweep. A LoRA must already exist as a slot in the workflow's
+  Power Lora Loader (rgthree) node - a slot can be toggled here but not
+  created. "Run LoRA Test" runs it through
+  `funkytown_testing_harness.lora_test.run()`.
 - **Settings window** - ComfyUI server URL, ComfyUI installation folder (for
   the workflow dropdown), and optional overrides for where
   `funkytown-testing-harness` and `comfy-prompt-tools` live if they aren't
   sibling directories.
 - **Save Config.../Load Config...** - read and write the same JSON config
-  format `run_test.py` uses on the command line (defaults to that project's
-  `configs/` folder), so a config built in the GUI can be run headlessly
-  later, or vice versa.
+  formats `run_test.py`/`lora_test.py` use on the command line (defaults to
+  that project's `configs/` folder), tab-aware - Save writes whichever
+  format matches the active tab, and Load auto-detects the format (presence
+  of a `"loras"` key) and switches to the matching tab. A config built in the
+  GUI can be run headlessly later, or vice versa.
 
-Clicking **Run Test** writes the assembled config to this project's own
-`gui_last_run.json` (gitignored) and runs it through
-`funkytown_testing_harness.run_test.run()` - the exact function the CLI
-uses - on a background thread so the window doesn't freeze. Progress streams
-into the log panel at the bottom, the same messages the CLI would print.
+Clicking **Run Model Test**/**Run LoRA Test** writes the assembled config to
+this project's own `gui_last_model_run.json`/`gui_last_lora_run.json`
+(gitignored) and runs it through the matching `run()` function - the exact
+one the corresponding CLI uses - on a background thread so the window
+doesn't freeze. Progress streams into the shared log panel at the bottom,
+the same messages the CLI would print.
 
 There's no pass/fail in any of this (see the harness project's README for
 why) - the GUI just makes it faster to build a config and watch it queue.
