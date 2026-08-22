@@ -10,9 +10,12 @@ from pathlib import Path
 
 import funkytown_testing_harness
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -79,6 +82,10 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self._build_lora_tab(), "LoRA")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
+
+        self.run_button = QPushButton("Run Test")
+        self.run_button.clicked.connect(self._on_run_clicked)
+        root.addWidget(self.run_button)
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -249,7 +256,18 @@ class MainWindow(QMainWindow):
     def _build_models_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.addWidget(QLabel("<b>Models to compare</b> (at least 2 required)"))
+
+        self.models_enabled_check = QCheckBox("Enable Models test")
+        self.models_enabled_check.setChecked(True)
+        self.models_enabled_check.setToolTip(
+            "If LoRA is also enabled, every model here is run against every LoRA "
+            "combination instead of comparing models against each other."
+        )
+        layout.addWidget(self.models_enabled_check)
+
+        layout.addWidget(QLabel(
+            "<b>Models to compare</b> (at least 2 required alone; at least 1 if LoRA is also enabled)"
+        ))
 
         row = QHBoxLayout()
         row.addWidget(QLabel("Model:"))
@@ -275,10 +293,6 @@ class MainWindow(QMainWindow):
         remove_button.clicked.connect(self._remove_selected_model)
         buttons_row.addWidget(remove_button)
         layout.addLayout(buttons_row)
-
-        self.run_model_button = QPushButton("Run Model Test")
-        self.run_model_button.clicked.connect(self._on_run_model_clicked)
-        layout.addWidget(self.run_model_button)
 
         return page
 
@@ -356,48 +370,21 @@ class MainWindow(QMainWindow):
             ],
         }
 
-    def _on_run_model_clicked(self):
-        if not self.workflow_combo.currentText().strip():
-            QMessageBox.warning(self, "No workflow selected", "Pick a source workflow first.")
-            return
-        if len(self._models) < 2:
-            QMessageBox.warning(self, "Not enough models", "Add at least 2 models to compare.")
-            return
-
-        config = self._build_model_config_dict()
-        if not config["positive_prompt"]:
-            del config["positive_prompt"]
-        GUI_MODEL_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
-
-        self.log_view.clear()
-        self.run_model_button.setEnabled(False)
-        self.run_model_button.setText("Running...")
-
-        self._runner_thread = TestRunnerThread(run_model_test, GUI_MODEL_RUN_CONFIG_PATH, self)
-        self._runner_thread.log_line.connect(self._log)
-        self._runner_thread.finished_ok.connect(self._on_run_model_finished_ok)
-        self._runner_thread.finished_error.connect(self._on_run_model_finished_error)
-        self._runner_thread.start()
-
-    def _on_run_model_finished_ok(self):
-        self.run_model_button.setEnabled(True)
-        self.run_model_button.setText("Run Model Test")
-        self._log("Done.")
-
-    def _on_run_model_finished_error(self, message):
-        self.run_model_button.setEnabled(True)
-        self.run_model_button.setText("Run Model Test")
-        self._log(f"ERROR: {message}")
-        QMessageBox.critical(self, "Run failed", message)
-
     # ---- lora tab -----------------------------------------------------------
 
     def _build_lora_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
 
+        self.lora_enabled_check = QCheckBox("Enable LoRA test")
+        self.lora_enabled_check.setToolTip(
+            "If Models is also enabled, the model dropdown below is ignored - every "
+            "model on the Models tab is run against every LoRA combination instead."
+        )
+        layout.addWidget(self.lora_enabled_check)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("Model:"))
+        row.addWidget(QLabel("Model (used only if Models tab is NOT also enabled):"))
         self.lora_model_combo = QComboBox()
         row.addWidget(self.lora_model_combo, 1)
         refresh_model_button = QPushButton("Refresh")
@@ -441,10 +428,6 @@ class MainWindow(QMainWindow):
         remove_button.clicked.connect(self._remove_selected_lora)
         buttons_row.addWidget(remove_button)
         layout.addLayout(buttons_row)
-
-        self.run_lora_button = QPushButton("Run LoRA Test")
-        self.run_lora_button.clicked.connect(self._on_run_lora_clicked)
-        layout.addWidget(self.run_lora_button)
 
         return page
 
@@ -509,40 +492,119 @@ class MainWindow(QMainWindow):
             ],
         }
 
-    def _on_run_lora_clicked(self):
+    def _build_lora_config_dict_for(self, models):
+        """Same shape _build_lora_config_dict produces, but with an explicit
+        models list - used for the combined mode (Models list x LoRA combos)."""
+        return {
+            "name": self.name_edit.text().strip() or "lora_testing",
+            "source_workflow": self.workflow_combo.currentText().strip(),
+            "models": models,
+            "positive_prompt": self.prompt_edit.toPlainText().strip(),
+            "combine_loras": self.combine_loras_check.isChecked(),
+            "server": self.settings["server"],
+            "loras": [
+                {"lora": lora_name, "weights": weights}
+                for lora_name, weights in self._loras.items()
+            ],
+        }
+
+    # ---- unified run (Models tab and/or LoRA tab, whichever are enabled) ----
+
+    def _build_effective_run(self):
+        """Returns (config, run_func) for whichever tab(s) are enabled, or
+        (None, None) with a warning already shown if it can't run yet."""
+        models_on = self.models_enabled_check.isChecked()
+        lora_on = self.lora_enabled_check.isChecked()
+
+        if not models_on and not lora_on:
+            QMessageBox.warning(self, "Nothing enabled", "Enable the Models tab, the LoRA tab, or both, to run a test.")
+            return None, None
         if not self.workflow_combo.currentText().strip():
             QMessageBox.warning(self, "No workflow selected", "Pick a source workflow first.")
-            return
+            return None, None
+
+        if models_on and lora_on:
+            if not self._models:
+                QMessageBox.warning(self, "No models", "Add at least 1 model on the Models tab.")
+                return None, None
+            if not self._loras:
+                QMessageBox.warning(self, "No LoRAs", "Add at least 1 LoRA on the LoRA tab.")
+                return None, None
+            config = self._build_lora_config_dict_for(list(self._models.keys()))
+            if not config["positive_prompt"]:
+                del config["positive_prompt"]
+            return config, run_lora_test
+
+        if models_on:
+            if len(self._models) < 2:
+                QMessageBox.warning(self, "Not enough models", "Add at least 2 models to compare.")
+                return None, None
+            config = self._build_model_config_dict()
+            if not config["positive_prompt"]:
+                del config["positive_prompt"]
+            return config, run_model_test
+
+        # lora_on only
         if not self.lora_model_combo.currentText().strip():
             QMessageBox.warning(self, "No model selected", "Pick a model for the LoRA test first.")
-            return
+            return None, None
         if not self._loras:
             QMessageBox.warning(self, "No LoRAs", "Add at least 1 LoRA to test.")
-            return
-
+            return None, None
         config = self._build_lora_config_dict()
         if not config["positive_prompt"]:
             del config["positive_prompt"]
-        GUI_LORA_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        return config, run_lora_test
+
+    def _confirm_run(self, config):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Confirm test run")
+        dialog.setMinimumSize(520, 420)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel("About to queue this test job:"))
+
+        text = QPlainTextEdit()
+        text.setReadOnly(True)
+        text.setPlainText(json.dumps(config, indent=2))
+        text.setFont(QFont("Consolas", 9))
+        layout.addWidget(text, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.button(QDialogButtonBox.Ok).setText("Run")
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        return dialog.exec() == QDialog.Accepted
+
+    def _on_run_clicked(self):
+        config, run_func = self._build_effective_run()
+        if config is None:
+            return
+        if not self._confirm_run(config):
+            return
+
+        run_config_path = GUI_LORA_RUN_CONFIG_PATH if run_func is run_lora_test else GUI_MODEL_RUN_CONFIG_PATH
+        run_config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
 
         self.log_view.clear()
-        self.run_lora_button.setEnabled(False)
-        self.run_lora_button.setText("Running...")
+        self.run_button.setEnabled(False)
+        self.run_button.setText("Running...")
 
-        self._runner_thread = TestRunnerThread(run_lora_test, GUI_LORA_RUN_CONFIG_PATH, self)
+        self._runner_thread = TestRunnerThread(run_func, run_config_path, self)
         self._runner_thread.log_line.connect(self._log)
-        self._runner_thread.finished_ok.connect(self._on_run_lora_finished_ok)
-        self._runner_thread.finished_error.connect(self._on_run_lora_finished_error)
+        self._runner_thread.finished_ok.connect(self._on_run_finished_ok)
+        self._runner_thread.finished_error.connect(self._on_run_finished_error)
         self._runner_thread.start()
 
-    def _on_run_lora_finished_ok(self):
-        self.run_lora_button.setEnabled(True)
-        self.run_lora_button.setText("Run LoRA Test")
+    def _on_run_finished_ok(self):
+        self.run_button.setEnabled(True)
+        self.run_button.setText("Run Test")
         self._log("Done.")
 
-    def _on_run_lora_finished_error(self, message):
-        self.run_lora_button.setEnabled(True)
-        self.run_lora_button.setText("Run LoRA Test")
+    def _on_run_finished_error(self, message):
+        self.run_button.setEnabled(True)
+        self.run_button.setText("Run Test")
         self._log(f"ERROR: {message}")
         QMessageBox.critical(self, "Run failed", message)
 

@@ -41,21 +41,35 @@ project root - see "Launcher exe" below.
   (configured in Settings), plus a positive-prompt override box. The Strip
   LoRAs checkbox only applies on the Models tab (it's disabled on the LoRA
   tab, since a LoRA run needs those slots to stay present).
-- **Models tab** - pick a model from a live-queried dropdown (from ComfyUI's
-  `/object_info`) and "Add to list" builds up the models-to-compare list.
-  Double-click (or "Edit selected...") an entry to open its config window -
-  check a field (sampler/steps/cfg/scheduler/seed/denoise) to override it,
-  leave it unchecked to use the workflow's own value, and add multiple
-  configs to run that model more than once. "Run Model Test" runs it through
-  `funkytown_testing_harness.run_test.run()`.
-- **LoRA tab** - pick a single fixed model, optionally check "Combine LoRAs"
-  (run every LoRA together across the cartesian product of their weights,
-  instead of one at a time), then pick a LoRA from a live-queried dropdown
-  (from ComfyUI's `LoraLoader` node) and "Add to list" to give it a list of
-  weights to sweep. A LoRA must already exist as a slot in the workflow's
-  Power Lora Loader (rgthree) node - a slot can be toggled here but not
-  created. "Run LoRA Test" runs it through
-  `funkytown_testing_harness.lora_test.run()`.
+- **Models tab** - an "Enable Models test" checkbox, then pick a model from
+  a live-queried dropdown (from ComfyUI's `/object_info`) and "Add to list"
+  builds up the models list. Double-click (or "Edit selected...") an entry
+  to open its config window - check a field
+  (sampler/steps/cfg/scheduler/seed/denoise) to override it, leave it
+  unchecked to use the workflow's own value, and add multiple configs to run
+  that model more than once.
+- **LoRA tab** - an "Enable LoRA test" checkbox, a model dropdown (only used
+  when this tab is enabled *without* Models also enabled - see "Run Test"
+  below), a "Combine LoRAs" checkbox (run every LoRA together across the
+  cartesian product of their weights, instead of one at a time), then pick a
+  LoRA from a live-queried dropdown (from ComfyUI's `LoraLoader` node) and
+  "Add to list" to give it a list of weights to sweep. A LoRA must already
+  exist as a slot in the workflow's Power Lora Loader (rgthree) node - a
+  slot can be toggled here but not created.
+- **Run Test** (below the tabs, shared) - what it does depends on which
+  tab(s) are enabled:
+  - **Models only** - compares the Models tab's list against each other,
+    via `funkytown_testing_harness.run_test.run()`.
+  - **LoRA only** - sweeps the LoRA tab's LoRAs against its own model
+    dropdown, via `funkytown_testing_harness.lora_test.run()`.
+  - **Both enabled** - every model in the Models tab's list is run against
+    every LoRA combination from the LoRA tab (the LoRA tab's own model
+    dropdown is ignored in this case) - also via `lora_test.run()`, using
+    its `"models"` list form.
+
+  Before anything is queued, a **Confirm test run** dialog shows the exact
+  JSON that's about to be submitted, so you can check it over - Run to
+  proceed, Cancel to back out and adjust something first.
 - **Settings window** - ComfyUI server URL, ComfyUI installation folder (for
   the workflow dropdown), and optional overrides for where
   `funkytown-testing-harness` and `comfy-prompt-tools` live if they aren't
@@ -63,16 +77,18 @@ project root - see "Launcher exe" below.
 - **Save Config.../Load Config...** - read and write the same JSON config
   formats `run_test.py`/`lora_test.py` use on the command line (defaults to
   that project's `configs/` folder), tab-aware - Save writes whichever
-  format matches the active tab, and Load auto-detects the format (presence
-  of a `"loras"` key) and switches to the matching tab. A config built in the
-  GUI can be run headlessly later, or vice versa.
+  format matches the currently-*visible* tab (independent of the enable
+  checkboxes), and Load auto-detects the format (presence of a `"loras"`
+  key) and switches to the matching tab. A config built in the GUI can be
+  run headlessly later, or vice versa. (The combined Models+LoRA config
+  produced by Run Test isn't currently save-able through this - only
+  reachable via the confirmation dialog on an actual run.)
 
-Clicking **Run Model Test**/**Run LoRA Test** writes the assembled config to
-this project's own `gui_last_model_run.json`/`gui_last_lora_run.json`
-(gitignored) and runs it through the matching `run()` function - the exact
-one the corresponding CLI uses - on a background thread so the window
-doesn't freeze. Progress streams into the shared log panel at the bottom,
-the same messages the CLI would print.
+After confirming, the assembled config is written to this project's own
+`gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending
+on which `run()` function is being used) and run on a background thread so
+the window doesn't freeze. Progress streams into the shared log panel at the
+bottom, the same messages the CLI would print.
 
 There's no pass/fail in any of this (see the harness project's README for
 why) - the GUI just makes it faster to build a config and watch it queue.
