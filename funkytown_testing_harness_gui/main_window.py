@@ -80,14 +80,19 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_workflow_group())
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_models_tab(), "Models")
+        self.tabs.addTab(self._build_models_tab(), "Model")
         self.tabs.addTab(self._build_lora_tab(), "LoRA")
         self.tabs.currentChanged.connect(self._on_tab_changed)
         root.addWidget(self.tabs, 1)
 
+        run_row = QHBoxLayout()
         self.run_button = QPushButton("Run Test")
         self.run_button.clicked.connect(self._on_run_clicked)
-        root.addWidget(self.run_button)
+        run_row.addWidget(self.run_button, 1)
+        save_test_button = QPushButton("Save Test...")
+        save_test_button.clicked.connect(self._file_save)
+        run_row.addWidget(save_test_button)
+        root.addLayout(run_row)
 
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
@@ -189,7 +194,7 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
 
         self.strip_loras_check = QCheckBox("Strip LoRAs (clear the Power Lora Loader node)")
-        self.strip_loras_check.setToolTip("Models tab only - lora_test.py needs the LoRA slots to stay present.")
+        self.strip_loras_check.setToolTip("Model tab only - lora_test.py needs the LoRA slots to stay present.")
         layout.addWidget(self.strip_loras_check)
 
         layout.addWidget(QLabel("Positive prompt override (leave blank to use the workflow's own):"))
@@ -259,8 +264,9 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
 
         layout.addWidget(QLabel(
-            "<b>Models to compare</b> (at least 2 required alone; at least 1 if the "
-            "LoRA tab also has LoRAs added - see Run Test below)"
+            "<b>Model(s)</b> - the model(s) any test uses. At least 2 required to "
+            "compare models against each other; 1 is enough if the LoRA tab also has "
+            "LoRAs added (every model here is then run against every LoRA combination)."
         ))
 
         row = QHBoxLayout()
@@ -294,13 +300,12 @@ class MainWindow(QMainWindow):
         models = comfy_client.list_available_models(self.settings["server"])
         if not models:
             self._log("No models found - is ComfyUI running and reachable?")
-        for combo in (self.model_combo, self.lora_model_combo):
-            current = combo.currentText()
-            combo.clear()
-            combo.addItems(models)
-            idx = combo.findText(current)
-            if idx >= 0:
-                combo.setCurrentIndex(idx)
+        current = self.model_combo.currentText()
+        self.model_combo.clear()
+        self.model_combo.addItems(models)
+        idx = self.model_combo.findText(current)
+        if idx >= 0:
+            self.model_combo.setCurrentIndex(idx)
 
     def _refresh_sampler_options(self):
         self._sampler_names = comfy_client.list_sampler_names(self.settings["server"]) or ["euler"]
@@ -370,14 +375,9 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("Model (used only if the Models tab has no models added):"))
-        self.lora_model_combo = QComboBox()
-        row.addWidget(self.lora_model_combo, 1)
-        refresh_model_button = QPushButton("Refresh")
-        refresh_model_button.clicked.connect(self._refresh_model_dropdown)
-        row.addWidget(refresh_model_button)
-        layout.addLayout(row)
+        layout.addWidget(QLabel(
+            "Runs against whichever model(s) are on the Model tab - add one there first."
+        ))
 
         self.combine_loras_check = QCheckBox(
             "Combine LoRAs (run every weight combination together, rather than one LoRA at a time)"
@@ -465,23 +465,9 @@ class MainWindow(QMainWindow):
             label = f"{lora_name}  — {n} weight{'s' if n != 1 else ''}"
             self.loras_list.addItem(QListWidgetItem(label))
 
-    def _build_lora_config_dict(self):
-        return {
-            "name": self.name_edit.text().strip() or "lora_testing",
-            "source_workflow": self.workflow_combo.currentText().strip(),
-            "model": self.lora_model_combo.currentText().strip(),
-            "positive_prompt": self.prompt_edit.toPlainText().strip(),
-            "combine_loras": self.combine_loras_check.isChecked(),
-            "server": self.settings["server"],
-            "loras": [
-                {"lora": lora_name, "weights": weights}
-                for lora_name, weights in self._loras.items()
-            ],
-        }
-
     def _build_lora_config_dict_for(self, models):
-        """Same shape _build_lora_config_dict produces, but with an explicit
-        models list - used for the combined mode (Models list x LoRA combos)."""
+        """A lora_test.py-shaped config using the Model tab's list - the sole
+        source of model selection for any LoRA run now."""
         return {
             "name": self.name_edit.text().strip() or "lora_testing",
             "source_workflow": self.workflow_combo.currentText().strip(),
@@ -504,35 +490,29 @@ class MainWindow(QMainWindow):
         lora_on = bool(self._loras)
 
         if not models_on and not lora_on:
-            QMessageBox.warning(self, "Nothing to run", "Add at least one model (Models tab) or LoRA (LoRA tab) to run a test.")
+            QMessageBox.warning(self, "Nothing to run", "Add at least one model (Model tab) or LoRA (LoRA tab) to run a test.")
             return None, None
         if not self.workflow_combo.currentText().strip():
             QMessageBox.warning(self, "No workflow selected", "Pick a source workflow first.")
             return None, None
 
-        if models_on and lora_on:
+        if lora_on:
+            if not models_on:
+                QMessageBox.warning(self, "No model selected", "Add at least 1 model on the Model tab first.")
+                return None, None
             config = self._build_lora_config_dict_for(list(self._models.keys()))
             if not config["positive_prompt"]:
                 del config["positive_prompt"]
             return config, run_lora_test
 
-        if models_on:
-            if len(self._models) < 2:
-                QMessageBox.warning(self, "Not enough models", "Add at least 2 models to compare.")
-                return None, None
-            config = self._build_model_config_dict()
-            if not config["positive_prompt"]:
-                del config["positive_prompt"]
-            return config, run_model_test
-
-        # lora_on only
-        if not self.lora_model_combo.currentText().strip():
-            QMessageBox.warning(self, "No model selected", "Pick a model for the LoRA test first.")
+        # models_on only
+        if len(self._models) < 2:
+            QMessageBox.warning(self, "Not enough models", "Add at least 2 models to compare.")
             return None, None
-        config = self._build_lora_config_dict()
+        config = self._build_model_config_dict()
         if not config["positive_prompt"]:
             del config["positive_prompt"]
-        return config, run_lora_test
+        return config, run_model_test
 
     def _confirm_run(self, config):
         dialog = QDialog(self)
@@ -611,16 +591,13 @@ class MainWindow(QMainWindow):
                 {"lora": lora_name, "weights": weights}
                 for lora_name, weights in self._loras.items()
             ]
-            lora_model = self.lora_model_combo.currentText().strip()
-            if lora_model:
-                config["lora_model"] = lora_model
         return config
 
     def _file_save(self):
         if not self._models and not self._loras:
             QMessageBox.critical(
                 self, "Nothing to save",
-                "Add at least one model (Models tab) or LoRA (LoRA tab) before saving.",
+                "Add at least one model (Model tab) or LoRA (LoRA tab) before saving.",
             )
             return
 
@@ -666,11 +643,15 @@ class MainWindow(QMainWindow):
             self._rebuild_loras_list()
             if "combine_loras" in config:
                 self.combine_loras_check.setChecked(bool(config["combine_loras"]))
-            lora_model = config.get("lora_model") or config.get("model")
-            if lora_model:
-                if self.lora_model_combo.findText(lora_model) < 0:
-                    self.lora_model_combo.addItem(lora_model)
-                self.lora_model_combo.setCurrentText(lora_model)
+            # Older lora_test.py configs used a single "model" key - there's
+            # no dropdown to hold that any more, so fold it into the Model
+            # tab's list instead of dropping it (unless a "models" list was
+            # already present above and took care of it).
+            if "models" not in config:
+                model_name = (config.get("model") or "").strip()
+                if model_name and model_name not in self._models:
+                    self._models[model_name] = [{}]
+                    self._rebuild_models_list()
 
         self._log(f"Imported config from {path}")
 

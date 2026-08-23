@@ -39,49 +39,53 @@ project root - see "Launcher exe" below.
 - **Workflow selector** (shared, top of the window) - dropdown of workflow
   files found in your ComfyUI installation's `user/default/workflows` folder
   (configured in Settings), plus a positive-prompt override box. The Strip
-  LoRAs checkbox only applies on the Models tab (it's disabled on the LoRA
+  LoRAs checkbox only applies on the Model tab (it's disabled on the LoRA
   tab, since a LoRA run needs those slots to stay present).
-- **Models tab** - pick a model from a live-queried dropdown (from ComfyUI's
-  `/object_info`) and "Add to list" builds up the models list. Double-click
-  (or "Edit selected...") an entry to open its config window - check a field
+- **Model tab** - pick a model from a live-queried dropdown (from ComfyUI's
+  `/object_info`) and "Add to list" builds up the model list - this is the
+  *only* place model selection happens, for both a Models-only comparison
+  run and any LoRA run. Double-click (or "Edit selected...") an entry to
+  open its config window - check a field
   (sampler/steps/cfg/scheduler/seed/denoise) to override it, leave it
   unchecked to use the workflow's own value, and add multiple configs to run
   that model more than once. A tab is "active" for Run Test purely by having
   something in its list - there's no separate enable checkbox.
-- **LoRA tab** - a model dropdown (only used when the Models tab's list is
-  empty - see "Run Test" below), a "Combine LoRAs" checkbox (run every LoRA
-  together across the cartesian product of their weights, instead of one at
-  a time), then pick a LoRA from a live-queried dropdown (from ComfyUI's
-  `LoraLoader` node) and "Add to list" to give it a list of weights to
-  sweep. A LoRA must already exist as a slot in the workflow's Power Lora
-  Loader (rgthree) node - a slot can be toggled here but not created.
+- **LoRA tab** - a "Combine LoRAs" checkbox (run every LoRA together across
+  the cartesian product of their weights, instead of one at a time), then
+  pick a LoRA from a live-queried dropdown (from ComfyUI's `LoraLoader`
+  node) and "Add to list" to give it a list of weights to sweep. A LoRA
+  must already exist as a slot in the workflow's Power Lora Loader
+  (rgthree) node - a slot can be toggled here but not created. There's no
+  model picker here any more - a LoRA run always uses whatever's on the
+  Model tab.
 - **Run Test** (below the tabs, shared) - what it does depends on which
   tab(s) have something in their list:
-  - **Models only** - compares the Models tab's list against each other,
-    via `funkytown_testing_harness.run_test.run()`.
-  - **LoRA only** - sweeps the LoRA tab's LoRAs against its own model
-    dropdown, via `funkytown_testing_harness.lora_test.run()`.
-  - **Both populated** - every model in the Models tab's list is run against
-    every LoRA combination from the LoRA tab (the LoRA tab's own model
-    dropdown is ignored in this case) - also via `lora_test.run()`, using
-    its `"models"` list form.
+  - **Model only** - compares the Model tab's list against each other
+    (requires at least 2), via `funkytown_testing_harness.run_test.run()`.
+  - **LoRA populated** - sweeps the LoRA tab's LoRAs against whichever
+    model(s) are on the Model tab (at least 1 required), via
+    `funkytown_testing_harness.lora_test.run()`.
 
   Before anything is queued, a **Confirm test run** dialog shows the exact
   JSON that's about to be submitted, so you can check it over - Run to
-  proceed, Cancel to back out and adjust something first.
+  proceed, Cancel to back out and adjust something first. **Save Test...**
+  sits next to Run Test and writes the same combined config to a file
+  instead of running it (same as `File > Save...` below).
 - **Settings window** - ComfyUI server URL, ComfyUI installation folder (for
   the workflow dropdown), and optional overrides for where
   `funkytown-testing-harness` and `comfy-prompt-tools` live if they aren't
   sibling directories.
 - **File menu** - `File > Save...` writes the *combined* current state of
-  both the Models tab and the LoRA tab together to one JSON file (defaults
+  both the Model tab and the LoRA tab together to one JSON file (defaults
   to `funkytown-testing-harness`'s `configs/` folder). If both tabs are
   empty it shows an error and writes nothing. `File > Import...` reads a
   JSON file back in and populates both tabs from it - each side only
   touches its own tab's data, and only if the file actually has that
   key, so importing an older single-schema file (just `"models"`, or just
-  `"loras"`/`"model"`) combines into whatever's already on the other tab
-  instead of wiping it out.
+  `"loras"`) combines into whatever's already on the other tab instead of
+  wiping it out. An older lora_test.py config's singular `"model"` key (no
+  `"models"` list) is folded into the Model tab's list the same way, since
+  there's no separate LoRA-tab model field to hold it any more.
 
 After confirming, the assembled config is written to this project's own
 `gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending
