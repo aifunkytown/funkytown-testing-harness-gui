@@ -258,16 +258,9 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self.models_enabled_check = QCheckBox("Enable Models test")
-        self.models_enabled_check.setChecked(True)
-        self.models_enabled_check.setToolTip(
-            "If LoRA is also enabled, every model here is run against every LoRA "
-            "combination instead of comparing models against each other."
-        )
-        layout.addWidget(self.models_enabled_check)
-
         layout.addWidget(QLabel(
-            "<b>Models to compare</b> (at least 2 required alone; at least 1 if LoRA is also enabled)"
+            "<b>Models to compare</b> (at least 2 required alone; at least 1 if the "
+            "LoRA tab also has LoRAs added - see Run Test below)"
         ))
 
         row = QHBoxLayout()
@@ -377,15 +370,8 @@ class MainWindow(QMainWindow):
         page = QWidget()
         layout = QVBoxLayout(page)
 
-        self.lora_enabled_check = QCheckBox("Enable LoRA test")
-        self.lora_enabled_check.setToolTip(
-            "If Models is also enabled, the model dropdown below is ignored - every "
-            "model on the Models tab is run against every LoRA combination instead."
-        )
-        layout.addWidget(self.lora_enabled_check)
-
         row = QHBoxLayout()
-        row.addWidget(QLabel("Model (used only if Models tab is NOT also enabled):"))
+        row.addWidget(QLabel("Model (used only if the Models tab has no models added):"))
         self.lora_model_combo = QComboBox()
         row.addWidget(self.lora_model_combo, 1)
         refresh_model_button = QPushButton("Refresh")
@@ -509,28 +495,22 @@ class MainWindow(QMainWindow):
             ],
         }
 
-    # ---- unified run (Models tab and/or LoRA tab, whichever are enabled) ----
+    # ---- unified run (Models tab and/or LoRA tab, whichever are populated) ----
 
     def _build_effective_run(self):
-        """Returns (config, run_func) for whichever tab(s) are enabled, or
+        """Returns (config, run_func) for whichever tab(s) are populated, or
         (None, None) with a warning already shown if it can't run yet."""
-        models_on = self.models_enabled_check.isChecked()
-        lora_on = self.lora_enabled_check.isChecked()
+        models_on = bool(self._models)
+        lora_on = bool(self._loras)
 
         if not models_on and not lora_on:
-            QMessageBox.warning(self, "Nothing enabled", "Enable the Models tab, the LoRA tab, or both, to run a test.")
+            QMessageBox.warning(self, "Nothing to run", "Add at least one model (Models tab) or LoRA (LoRA tab) to run a test.")
             return None, None
         if not self.workflow_combo.currentText().strip():
             QMessageBox.warning(self, "No workflow selected", "Pick a source workflow first.")
             return None, None
 
         if models_on and lora_on:
-            if not self._models:
-                QMessageBox.warning(self, "No models", "Add at least 1 model on the Models tab.")
-                return None, None
-            if not self._loras:
-                QMessageBox.warning(self, "No LoRAs", "Add at least 1 LoRA on the LoRA tab.")
-                return None, None
             config = self._build_lora_config_dict_for(list(self._models.keys()))
             if not config["positive_prompt"]:
                 del config["positive_prompt"]
@@ -548,9 +528,6 @@ class MainWindow(QMainWindow):
         # lora_on only
         if not self.lora_model_combo.currentText().strip():
             QMessageBox.warning(self, "No model selected", "Pick a model for the LoRA test first.")
-            return None, None
-        if not self._loras:
-            QMessageBox.warning(self, "No LoRAs", "Add at least 1 LoRA to test.")
             return None, None
         config = self._build_lora_config_dict()
         if not config["positive_prompt"]:
@@ -683,7 +660,6 @@ class MainWindow(QMainWindow):
             self._rebuild_models_list()
             if "strip_loras" in config:
                 self.strip_loras_check.setChecked(bool(config["strip_loras"]))
-            self.models_enabled_check.setChecked(True)
 
         if "loras" in config:
             self._loras = {entry["lora"]: entry.get("weights") or [1.0] for entry in config["loras"]}
@@ -695,7 +671,6 @@ class MainWindow(QMainWindow):
                 if self.lora_model_combo.findText(lora_model) < 0:
                     self.lora_model_combo.addItem(lora_model)
                 self.lora_model_combo.setCurrentText(lora_model)
-            self.lora_enabled_check.setChecked(True)
 
         self._log(f"Imported config from {path}")
 

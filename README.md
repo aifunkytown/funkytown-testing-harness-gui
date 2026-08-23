@@ -41,28 +41,27 @@ project root - see "Launcher exe" below.
   (configured in Settings), plus a positive-prompt override box. The Strip
   LoRAs checkbox only applies on the Models tab (it's disabled on the LoRA
   tab, since a LoRA run needs those slots to stay present).
-- **Models tab** - an "Enable Models test" checkbox, then pick a model from
-  a live-queried dropdown (from ComfyUI's `/object_info`) and "Add to list"
-  builds up the models list. Double-click (or "Edit selected...") an entry
-  to open its config window - check a field
+- **Models tab** - pick a model from a live-queried dropdown (from ComfyUI's
+  `/object_info`) and "Add to list" builds up the models list. Double-click
+  (or "Edit selected...") an entry to open its config window - check a field
   (sampler/steps/cfg/scheduler/seed/denoise) to override it, leave it
   unchecked to use the workflow's own value, and add multiple configs to run
-  that model more than once.
-- **LoRA tab** - an "Enable LoRA test" checkbox, a model dropdown (only used
-  when this tab is enabled *without* Models also enabled - see "Run Test"
-  below), a "Combine LoRAs" checkbox (run every LoRA together across the
-  cartesian product of their weights, instead of one at a time), then pick a
-  LoRA from a live-queried dropdown (from ComfyUI's `LoraLoader` node) and
-  "Add to list" to give it a list of weights to sweep. A LoRA must already
-  exist as a slot in the workflow's Power Lora Loader (rgthree) node - a
-  slot can be toggled here but not created.
+  that model more than once. A tab is "active" for Run Test purely by having
+  something in its list - there's no separate enable checkbox.
+- **LoRA tab** - a model dropdown (only used when the Models tab's list is
+  empty - see "Run Test" below), a "Combine LoRAs" checkbox (run every LoRA
+  together across the cartesian product of their weights, instead of one at
+  a time), then pick a LoRA from a live-queried dropdown (from ComfyUI's
+  `LoraLoader` node) and "Add to list" to give it a list of weights to
+  sweep. A LoRA must already exist as a slot in the workflow's Power Lora
+  Loader (rgthree) node - a slot can be toggled here but not created.
 - **Run Test** (below the tabs, shared) - what it does depends on which
-  tab(s) are enabled:
+  tab(s) have something in their list:
   - **Models only** - compares the Models tab's list against each other,
     via `funkytown_testing_harness.run_test.run()`.
   - **LoRA only** - sweeps the LoRA tab's LoRAs against its own model
     dropdown, via `funkytown_testing_harness.lora_test.run()`.
-  - **Both enabled** - every model in the Models tab's list is run against
+  - **Both populated** - every model in the Models tab's list is run against
     every LoRA combination from the LoRA tab (the LoRA tab's own model
     dropdown is ignored in this case) - also via `lora_test.run()`, using
     its `"models"` list form.
@@ -82,8 +81,7 @@ project root - see "Launcher exe" below.
   touches its own tab's data, and only if the file actually has that
   key, so importing an older single-schema file (just `"models"`, or just
   `"loras"`/`"model"`) combines into whatever's already on the other tab
-  instead of wiping it out. Importing also auto-enables whichever tab(s)
-  it populated.
+  instead of wiping it out.
 
 After confirming, the assembled config is written to this project's own
 `gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending
