@@ -74,15 +74,16 @@ project root - see "Launcher exe" below.
   the workflow dropdown), and optional overrides for where
   `funkytown-testing-harness` and `comfy-prompt-tools` live if they aren't
   sibling directories.
-- **Save Config.../Load Config...** - read and write the same JSON config
-  formats `run_test.py`/`lora_test.py` use on the command line (defaults to
-  that project's `configs/` folder), tab-aware - Save writes whichever
-  format matches the currently-*visible* tab (independent of the enable
-  checkboxes), and Load auto-detects the format (presence of a `"loras"`
-  key) and switches to the matching tab. A config built in the GUI can be
-  run headlessly later, or vice versa. (The combined Models+LoRA config
-  produced by Run Test isn't currently save-able through this - only
-  reachable via the confirmation dialog on an actual run.)
+- **File menu** - `File > Save...` writes the *combined* current state of
+  both the Models tab and the LoRA tab together to one JSON file (defaults
+  to `funkytown-testing-harness`'s `configs/` folder). If both tabs are
+  empty it shows an error and writes nothing. `File > Import...` reads a
+  JSON file back in and populates both tabs from it - each side only
+  touches its own tab's data, and only if the file actually has that
+  key, so importing an older single-schema file (just `"models"`, or just
+  `"loras"`/`"model"`) combines into whatever's already on the other tab
+  instead of wiping it out. Importing also auto-enables whichever tab(s)
+  it populated.
 
 After confirming, the assembled config is written to this project's own
 `gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending

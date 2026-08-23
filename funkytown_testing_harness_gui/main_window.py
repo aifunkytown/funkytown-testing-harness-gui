@@ -70,6 +70,8 @@ class MainWindow(QMainWindow):
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
         self._defaults_thread = None
 
+        self._build_menu_bar()
+
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
@@ -103,6 +105,13 @@ class MainWindow(QMainWindow):
             # dialog pops in front of it, rather than appearing mid-construction.
             QTimer.singleShot(0, self._first_run_prompt_install_dir)
 
+    # ---- menu bar -------------------------------------------------------------
+
+    def _build_menu_bar(self):
+        file_menu = self.menuBar().addMenu("&File")
+        file_menu.addAction("&Save...", self._file_save)
+        file_menu.addAction("&Import...", self._file_import)
+
     # ---- top bar (name, server status, settings) -------------------------
 
     def _build_top_bar(self):
@@ -117,14 +126,6 @@ class MainWindow(QMainWindow):
         settings_button = QPushButton("Settings...")
         settings_button.clicked.connect(self._open_settings)
         row.addWidget(settings_button)
-
-        load_button = QPushButton("Load Config...")
-        load_button.clicked.connect(self._load_config)
-        row.addWidget(load_button)
-
-        save_button = QPushButton("Save Config...")
-        save_button.clicked.connect(self._save_config)
-        row.addWidget(save_button)
 
         self._update_server_label()
         return row
@@ -608,45 +609,95 @@ class MainWindow(QMainWindow):
         self._log(f"ERROR: {message}")
         QMessageBox.critical(self, "Run failed", message)
 
-    # ---- config save / load (tab-aware) --------------------------------------
+    # ---- File menu: Save / Import (combined Models + LoRA state) --------------
 
-    def _save_config(self):
-        is_lora_tab = self.tabs.currentIndex() == LORA_TAB_INDEX
+    def _build_combined_config_dict(self):
+        """The full editing-session state for both tabs together - this is
+        the GUI's own save format, not necessarily what gets hand to
+        run_test.py/lora_test.py directly (that happens separately, per-run,
+        in _build_effective_run/_on_run_clicked)."""
+        config = {
+            "name": self.name_edit.text().strip() or "test",
+            "source_workflow": self.workflow_combo.currentText().strip(),
+            "positive_prompt": self.prompt_edit.toPlainText().strip(),
+            "server": self.settings["server"],
+        }
+        if self._models:
+            config["strip_loras"] = self.strip_loras_check.isChecked()
+            config["models"] = [
+                {"model": model_name, "configs": configs}
+                for model_name, configs in self._models.items()
+            ]
+        if self._loras:
+            config["combine_loras"] = self.combine_loras_check.isChecked()
+            config["loras"] = [
+                {"lora": lora_name, "weights": weights}
+                for lora_name, weights in self._loras.items()
+            ]
+            lora_model = self.lora_model_combo.currentText().strip()
+            if lora_model:
+                config["lora_model"] = lora_model
+        return config
+
+    def _file_save(self):
+        if not self._models and not self._loras:
+            QMessageBox.critical(
+                self, "Nothing to save",
+                "Add at least one model (Models tab) or LoRA (LoRA tab) before saving.",
+            )
+            return
+
+        config = self._build_combined_config_dict()
+        if not config["positive_prompt"]:
+            del config["positive_prompt"]
+
         CONFIGS_DIR.mkdir(exist_ok=True)
-        default_name = "lora-testing-config.json" if is_lora_tab else "model-testing-config.json"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save config", str(CONFIGS_DIR / default_name), "JSON files (*.json)"
+            self, "Save test config", str(CONFIGS_DIR / "combined-testing-config.json"), "JSON files (*.json)"
         )
         if not path:
             return
-        config = self._build_lora_config_dict() if is_lora_tab else self._build_model_config_dict()
-        if not config["positive_prompt"]:
-            del config["positive_prompt"]
         Path(path).write_text(json.dumps(config, indent=2), encoding="utf-8")
         self._log(f"Saved config to {path}")
 
-    def _load_config(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Load config", str(CONFIGS_DIR), "JSON files (*.json)")
+    def _file_import(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Import test config", str(CONFIGS_DIR), "JSON files (*.json)")
         if not path:
             return
         config = json.loads(Path(path).read_text(encoding="utf-8"))
-        self.name_edit.setText(config.get("name", "test"))
-        self.workflow_combo.setEditText(config.get("source_workflow", ""))
-        self.prompt_edit.setPlainText(config.get("positive_prompt", ""))
+
+        if "name" in config:
+            self.name_edit.setText(config["name"])
+        if "source_workflow" in config:
+            self.workflow_combo.setEditText(config["source_workflow"])
+        if "positive_prompt" in config:
+            self.prompt_edit.setPlainText(config["positive_prompt"])
+
+        # Each side only touches its own tab's data, and only if the
+        # imported file actually has that key - so importing an
+        # old-style single-schema file (or a combined one missing one
+        # side) combines into whatever's already on the other tab instead
+        # of wiping it out.
+        if "models" in config:
+            self._models = {m["model"]: m.get("configs") or [{}] for m in config["models"]}
+            self._rebuild_models_list()
+            if "strip_loras" in config:
+                self.strip_loras_check.setChecked(bool(config["strip_loras"]))
+            self.models_enabled_check.setChecked(True)
 
         if "loras" in config:
-            self.tabs.setCurrentIndex(LORA_TAB_INDEX)
-            self.lora_model_combo.setCurrentText(config.get("model", ""))
-            self.combine_loras_check.setChecked(bool(config.get("combine_loras")))
-            self._loras = {entry["lora"]: entry.get("weights") or [1.0] for entry in config.get("loras", [])}
+            self._loras = {entry["lora"]: entry.get("weights") or [1.0] for entry in config["loras"]}
             self._rebuild_loras_list()
-        else:
-            self.tabs.setCurrentIndex(MODELS_TAB_INDEX)
-            self.strip_loras_check.setChecked(bool(config.get("strip_loras")))
-            self._models = {m["model"]: m.get("configs") or [{}] for m in config.get("models", [])}
-            self._rebuild_models_list()
+            if "combine_loras" in config:
+                self.combine_loras_check.setChecked(bool(config["combine_loras"]))
+            lora_model = config.get("lora_model") or config.get("model")
+            if lora_model:
+                if self.lora_model_combo.findText(lora_model) < 0:
+                    self.lora_model_combo.addItem(lora_model)
+                self.lora_model_combo.setCurrentText(lora_model)
+            self.lora_enabled_check.setChecked(True)
 
-        self._log(f"Loaded config from {path}")
+        self._log(f"Imported config from {path}")
 
     # ---- shared log -----------------------------------------------------------
 
