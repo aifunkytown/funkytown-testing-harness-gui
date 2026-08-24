@@ -106,9 +106,14 @@ the bottom, the same messages the CLI would print.
 ### Variations tab
 
 Front end for `comfy_prompt_tools.generate_prompt_variations` - pick a CSV
-file and a row (or row range, e.g. `100-105`), then either check one or more
-aspects from a list populated from `prompt_aspect_vocab.json` (plus an
-optional free-text field for aspects not in that file), or switch to
+file and a row (or row range, e.g. `100-105`). **Show Prompts** (disabled
+until both are filled in) previews the exact source text each selected row
+will use - Cleaned Prompt if the CSV has that column and it's non-empty for
+the row, otherwise Positive Prompt, same preference `generate_prompt_variations.py`
+itself uses - so you can sanity-check the row selection before spending an
+Ollama call on it. Then either check one or more aspects from a list
+populated from `prompt_aspect_vocab.json` (plus an optional free-text field
+for aspects not in that file), or switch to
 "Random aspects" and pick how many to have chosen randomly from the vocab
 file per row. Set a variation count and (optionally) a different Ollama
 model, then **Generate Variations** - same confirm-dialog-then-background-

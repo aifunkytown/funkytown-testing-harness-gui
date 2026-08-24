@@ -5,6 +5,7 @@ funkytown_testing_harness.lora_test.run() and live_workflow.py exactly as
 their own CLIs do, so behavior is identical either way.
 """
 
+import csv
 import json
 from pathlib import Path
 
@@ -705,7 +706,18 @@ class MainWindow(QMainWindow):
         row_row.addWidget(QLabel("Row (or range, e.g. 100-105):"))
         self.variations_row_edit = QLineEdit()
         row_row.addWidget(self.variations_row_edit, 1)
+        self.variations_show_prompts_button = QPushButton("Show Prompts")
+        self.variations_show_prompts_button.setEnabled(False)
+        self.variations_show_prompts_button.setToolTip(
+            "Preview the source text for the selected row(s) - Cleaned Prompt if "
+            "present, otherwise Positive Prompt - before generating variations."
+        )
+        self.variations_show_prompts_button.clicked.connect(self._on_show_prompts_clicked)
+        row_row.addWidget(self.variations_show_prompts_button)
         layout.addLayout(row_row)
+
+        self.variations_csv_edit.textChanged.connect(self._update_show_prompts_button_enabled)
+        self.variations_row_edit.textChanged.connect(self._update_show_prompts_button_enabled)
 
         mode_row = QHBoxLayout()
         self.variations_named_radio = QRadioButton("Named aspect(s)")
@@ -786,6 +798,70 @@ class MainWindow(QMainWindow):
         )
         if path:
             self.variations_csv_edit.setText(path)
+
+    def _update_show_prompts_button_enabled(self):
+        enabled = bool(self.variations_csv_edit.text().strip()) and bool(self.variations_row_edit.text().strip())
+        self.variations_show_prompts_button.setEnabled(enabled)
+
+    def _on_show_prompts_clicked(self):
+        csv_path = self.variations_csv_edit.text().strip()
+        if not Path(csv_path).is_file():
+            QMessageBox.warning(self, "CSV not found", f"File not found:\n{csv_path}")
+            return
+
+        try:
+            row_numbers = generate_prompt_variations.parse_row_range(self.variations_row_edit.text().strip())
+        except Exception as e:
+            QMessageBox.warning(self, "Invalid row", str(e))
+            return
+
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        bad_rows = [r for r in row_numbers if r < 1 or r > len(rows)]
+        if bad_rows:
+            QMessageBox.warning(
+                self, "Row out of range",
+                f"Row(s) {', '.join(map(str, bad_rows))} out of range (CSV has {len(rows)} data row(s)).",
+            )
+            return
+
+        # Same source-text preference as generate_prompt_variations.run_batch:
+        # Cleaned Prompt if the CSV has that column and it's non-empty for
+        # this row, otherwise fall back to Positive Prompt.
+        cleaned_col = next((c for c in (rows[0].keys() if rows else []) if "cleaned" in c.lower()), None)
+
+        blocks = []
+        for row_num in row_numbers:
+            source_row = rows[row_num - 1]
+            cleaned_text = (source_row.get(cleaned_col) or "").strip() if cleaned_col else ""
+            positive_text = (source_row.get("Positive Prompt") or "").strip()
+            if cleaned_text:
+                blocks.append(f"Row {row_num} (Cleaned Prompt):\n{cleaned_text}")
+            elif positive_text:
+                blocks.append(f"Row {row_num} (Positive Prompt):\n{positive_text}")
+            else:
+                blocks.append(f"Row {row_num}: (no Cleaned Prompt or Positive Prompt text)")
+
+        self._show_text_dialog("Prompts for selected row(s)", "\n\n".join(blocks))
+
+    def _show_text_dialog(self, title, text):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(title)
+        dialog.setMinimumSize(520, 420)
+        layout = QVBoxLayout(dialog)
+
+        text_view = QPlainTextEdit()
+        text_view.setReadOnly(True)
+        text_view.setPlainText(text)
+        layout.addWidget(text_view, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok)
+        buttons.accepted.connect(dialog.accept)
+        layout.addWidget(buttons)
+
+        dialog.exec()
 
     def _build_variations_config(self):
         csv_path = self.variations_csv_edit.text().strip()
