@@ -12,6 +12,7 @@ import funkytown_testing_harness
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -27,6 +28,8 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QRadioButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -34,6 +37,7 @@ from PySide6.QtWidgets import (
 
 from funkytown_testing_harness.lora_test import run as run_lora_test
 from funkytown_testing_harness.run_test import run as run_model_test
+from comfy_prompt_tools import generate_prompt_variations
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
@@ -52,6 +56,7 @@ CONFIGS_DIR = HARNESS_ROOT / "configs"
 GUI_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GUI_MODEL_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_model_run.json"
 GUI_LORA_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_lora_run.json"
+GUI_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_variations_run.json"
 
 MODELS_TAB_INDEX = 0
 LORA_TAB_INDEX = 1
@@ -76,29 +81,10 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        root.addLayout(self._build_top_bar())
-        root.addWidget(self._build_workflow_group())
-
-        self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_models_tab(), "Model")
-        self.tabs.addTab(self._build_lora_tab(), "LoRA")
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        root.addWidget(self.tabs, 1)
-
-        run_row = QHBoxLayout()
-        self.run_button = QPushButton("Run Test")
-        self.run_button.clicked.connect(self._on_run_clicked)
-        run_row.addWidget(self.run_button, 1)
-        save_test_button = QPushButton("Save Test...")
-        save_test_button.clicked.connect(self._file_save)
-        run_row.addWidget(save_test_button, 1)
-        root.addLayout(run_row)
-
-        self.log_view = QPlainTextEdit()
-        self.log_view.setReadOnly(True)
-        self.log_view.setMaximumBlockCount(5000)
-        root.addWidget(QLabel("Log:"))
-        root.addWidget(self.log_view, 1)
+        self.outer_tabs = QTabWidget()
+        self.outer_tabs.addTab(self._build_testing_tab(), "Testing")
+        self.outer_tabs.addTab(self._build_variations_tab(), "Variations")
+        root.addWidget(self.outer_tabs, 1)
 
         self._refresh_workflow_list()
         self._refresh_model_dropdown()
@@ -116,6 +102,38 @@ class MainWindow(QMainWindow):
         file_menu = self.menuBar().addMenu("&File")
         file_menu.addAction("&Save...", self._file_save)
         file_menu.addAction("&Import...", self._file_import)
+
+    # ---- outer "Testing" tab: everything that existed before the Variations tab ----
+
+    def _build_testing_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        layout.addLayout(self._build_top_bar())
+        layout.addWidget(self._build_workflow_group())
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_models_tab(), "Model")
+        self.tabs.addTab(self._build_lora_tab(), "LoRA")
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.tabs, 1)
+
+        run_row = QHBoxLayout()
+        self.run_button = QPushButton("Run Test")
+        self.run_button.clicked.connect(self._on_run_clicked)
+        run_row.addWidget(self.run_button, 1)
+        save_test_button = QPushButton("Save Test...")
+        save_test_button.clicked.connect(self._file_save)
+        run_row.addWidget(save_test_button, 1)
+        layout.addLayout(run_row)
+
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        self.log_view.setMaximumBlockCount(5000)
+        layout.addWidget(QLabel("Log:"))
+        layout.addWidget(self.log_view, 1)
+
+        return page
 
     # ---- top bar (name, server status, settings) -------------------------
 
@@ -514,12 +532,12 @@ class MainWindow(QMainWindow):
             del config["positive_prompt"]
         return config, run_model_test
 
-    def _confirm_run(self, config):
+    def _confirm_json(self, title, config, description="About to submit this job:", ok_text="Run"):
         dialog = QDialog(self)
-        dialog.setWindowTitle("Confirm test run")
+        dialog.setWindowTitle(title)
         dialog.setMinimumSize(520, 420)
         layout = QVBoxLayout(dialog)
-        layout.addWidget(QLabel("About to queue this test job:"))
+        layout.addWidget(QLabel(description))
 
         text = QPlainTextEdit()
         text.setReadOnly(True)
@@ -528,12 +546,15 @@ class MainWindow(QMainWindow):
         layout.addWidget(text, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.button(QDialogButtonBox.Ok).setText("Run")
+        buttons.button(QDialogButtonBox.Ok).setText(ok_text)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
 
         return dialog.exec() == QDialog.Accepted
+
+    def _confirm_run(self, config):
+        return self._confirm_json("Confirm test run", config, "About to queue this test job:", "Run")
 
     def _on_run_clicked(self):
         config, run_func = self._build_effective_run()
@@ -659,3 +680,180 @@ class MainWindow(QMainWindow):
 
     def _log(self, line):
         self.log_view.appendPlainText(line)
+
+    # ---- Variations tab: comfy_prompt_tools.generate_prompt_variations --------
+
+    def _build_variations_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        layout.addWidget(QLabel(
+            "Generates variations of one prompt row from a CSV (via "
+            "comfy_prompt_tools.generate_prompt_variations), using a local Ollama model."
+        ))
+
+        csv_row = QHBoxLayout()
+        csv_row.addWidget(QLabel("CSV file:"))
+        self.variations_csv_edit = QLineEdit()
+        csv_row.addWidget(self.variations_csv_edit, 1)
+        browse_button = QPushButton("Browse...")
+        browse_button.clicked.connect(self._on_browse_variations_csv)
+        csv_row.addWidget(browse_button)
+        layout.addLayout(csv_row)
+
+        row_row = QHBoxLayout()
+        row_row.addWidget(QLabel("Row (or range, e.g. 100-105):"))
+        self.variations_row_edit = QLineEdit()
+        row_row.addWidget(self.variations_row_edit, 1)
+        layout.addLayout(row_row)
+
+        mode_row = QHBoxLayout()
+        self.variations_named_radio = QRadioButton("Named aspect(s)")
+        self.variations_named_radio.setChecked(True)
+        self.variations_named_radio.toggled.connect(self._on_variations_mode_changed)
+        self.variations_random_radio = QRadioButton("Random aspects:")
+        mode_group = QButtonGroup(page)
+        mode_group.addButton(self.variations_named_radio)
+        mode_group.addButton(self.variations_random_radio)
+        mode_row.addWidget(self.variations_named_radio)
+        mode_row.addWidget(self.variations_random_radio)
+        self.variations_random_spin = QSpinBox()
+        self.variations_random_spin.setRange(1, 50)
+        self.variations_random_spin.setValue(3)
+        self.variations_random_spin.setEnabled(False)
+        mode_row.addWidget(self.variations_random_spin)
+        mode_row.addStretch(1)
+        layout.addLayout(mode_row)
+
+        layout.addWidget(QLabel(
+            "Aspects (from prompt_aspect_vocab.json - check one or more):"
+        ))
+        self.variations_aspect_list = QListWidget()
+        self._populate_variations_aspect_list()
+        layout.addWidget(self.variations_aspect_list, 1)
+
+        extra_row = QHBoxLayout()
+        extra_row.addWidget(QLabel("Extra aspect(s) not in the list (comma-separated):"))
+        self.variations_extra_aspect_edit = QLineEdit()
+        extra_row.addWidget(self.variations_extra_aspect_edit, 1)
+        layout.addLayout(extra_row)
+
+        settings_row = QHBoxLayout()
+        settings_row.addWidget(QLabel("Count:"))
+        self.variations_count_spin = QSpinBox()
+        self.variations_count_spin.setRange(1, 100)
+        self.variations_count_spin.setValue(5)
+        settings_row.addWidget(self.variations_count_spin)
+        settings_row.addWidget(QLabel("Ollama model:"))
+        self.variations_model_edit = QLineEdit(generate_prompt_variations.DEFAULT_MODEL)
+        settings_row.addWidget(self.variations_model_edit, 1)
+        layout.addLayout(settings_row)
+
+        self.variations_generate_button = QPushButton("Generate Variations")
+        self.variations_generate_button.clicked.connect(self._on_generate_variations_clicked)
+        layout.addWidget(self.variations_generate_button)
+
+        self.variations_log_view = QPlainTextEdit()
+        self.variations_log_view.setReadOnly(True)
+        self.variations_log_view.setMaximumBlockCount(5000)
+        layout.addWidget(QLabel("Log:"))
+        layout.addWidget(self.variations_log_view, 1)
+
+        return page
+
+    def _populate_variations_aspect_list(self):
+        self.variations_aspect_list.clear()
+        vocab, _random_exclude, _multi_select, explicit_aspects = generate_prompt_variations.load_vocab(
+            generate_prompt_variations.DEFAULT_VOCAB_PATH
+        )
+        for aspect_name in sorted(vocab):
+            label = aspect_name + (" (explicit)" if aspect_name in explicit_aspects else "")
+            item = QListWidgetItem(label)
+            item.setData(Qt.UserRole, aspect_name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
+            self.variations_aspect_list.addItem(item)
+
+    def _on_variations_mode_changed(self, _checked):
+        named_mode = self.variations_named_radio.isChecked()
+        self.variations_aspect_list.setEnabled(named_mode)
+        self.variations_extra_aspect_edit.setEnabled(named_mode)
+        self.variations_random_spin.setEnabled(not named_mode)
+
+    def _on_browse_variations_csv(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Choose prompt CSV", self.variations_csv_edit.text() or str(CONFIGS_DIR), "CSV files (*.csv)"
+        )
+        if path:
+            self.variations_csv_edit.setText(path)
+
+    def _build_variations_config(self):
+        csv_path = self.variations_csv_edit.text().strip()
+        if not csv_path:
+            QMessageBox.warning(self, "No CSV file", "Choose a prompt CSV file first.")
+            return None
+        if not Path(csv_path).is_file():
+            QMessageBox.warning(self, "CSV not found", f"File not found:\n{csv_path}")
+            return None
+
+        row = self.variations_row_edit.text().strip()
+        if not row:
+            QMessageBox.warning(self, "No row", "Enter a row number or range (e.g. 100 or 100-105).")
+            return None
+
+        config = {
+            "csv_path": csv_path,
+            "row": row,
+            "count": self.variations_count_spin.value(),
+            "model": self.variations_model_edit.text().strip() or generate_prompt_variations.DEFAULT_MODEL,
+        }
+
+        if self.variations_named_radio.isChecked():
+            chosen = [
+                self.variations_aspect_list.item(i).data(Qt.UserRole)
+                for i in range(self.variations_aspect_list.count())
+                if self.variations_aspect_list.item(i).checkState() == Qt.Checked
+            ]
+            extra = [a.strip() for a in self.variations_extra_aspect_edit.text().split(",") if a.strip()]
+            aspects = chosen + extra
+            if not aspects:
+                QMessageBox.warning(
+                    self, "No aspect chosen",
+                    "Check at least one aspect, or type one in the extra-aspects field.",
+                )
+                return None
+            config["aspect"] = ", ".join(aspects)
+        else:
+            config["random_aspects"] = self.variations_random_spin.value()
+
+        return config
+
+    def _on_generate_variations_clicked(self):
+        config = self._build_variations_config()
+        if config is None:
+            return
+        if not self._confirm_json("Confirm variations job", config, "About to generate variations for:", "Generate"):
+            return
+
+        GUI_VARIATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+        self.variations_log_view.clear()
+        self.variations_generate_button.setEnabled(False)
+        self.variations_generate_button.setText("Generating...")
+
+        self._variations_thread = TestRunnerThread(generate_prompt_variations.run, GUI_VARIATIONS_RUN_CONFIG_PATH, self)
+        self._variations_thread.log_line.connect(self.variations_log_view.appendPlainText)
+        self._variations_thread.finished_ok.connect(self._on_variations_finished_ok)
+        self._variations_thread.finished_error.connect(self._on_variations_finished_error)
+        self._variations_thread.start()
+
+    def _on_variations_finished_ok(self):
+        self.variations_generate_button.setEnabled(True)
+        self.variations_generate_button.setText("Generate Variations")
+        self.variations_log_view.appendPlainText("Done.")
+
+    def _on_variations_finished_error(self, message):
+        self.variations_generate_button.setEnabled(True)
+        self.variations_generate_button.setText("Generate Variations")
+        self.variations_log_view.appendPlainText(f"ERROR: {message}")
+        QMessageBox.critical(self, "Generation failed", message)

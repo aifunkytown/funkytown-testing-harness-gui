@@ -2,8 +2,11 @@
 
 A local-only desktop front end (PySide6/Qt) for
 [funkytown-testing-harness](https://github.com/aifunkytown/funkytown-testing-harness) -
-build and run a model-comparison or LoRA-weight-sweep test config without
-hand-editing JSON.
+build and run a model-comparison or LoRA-weight-sweep test config, or
+generate prompt variations via
+[comfy-prompt-tools](https://github.com/aifunkytown/comfy-prompt-tools)'s
+`generate_prompt_variations.py`, without hand-editing JSON or the command
+line.
 
 ## Setup
 
@@ -30,13 +33,20 @@ project root - see "Launcher exe" below.
 
 ## What it does
 
+The window has two top-level tabs: **Testing** (build and run a
+model-comparison or LoRA-weight-sweep config) and **Variations** (generate
+prompt variations for one CSV row via Ollama).
+
 - **First-run setup** - until a ComfyUI installation folder is configured,
   startup tries to infer one from a running ComfyUI server's own launch
   arguments and asks you to confirm it; if it can't infer one (server not
   running, or launched without `--base-directory`) or you say the guess is
   wrong, it opens Settings for you to set it manually. Runs every launch
   until something's actually configured.
-- **Workflow selector** (shared, top of the window) - dropdown of workflow
+
+### Testing tab
+
+- **Workflow selector** (shared, top of the tab) - dropdown of workflow
   files found in your ComfyUI installation's `user/default/workflows` folder
   (configured in Settings), plus a positive-prompt override box. The Strip
   LoRAs checkbox only applies on the Model tab (it's disabled on the LoRA
@@ -90,8 +100,22 @@ project root - see "Launcher exe" below.
 After confirming, the assembled config is written to this project's own
 `gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending
 on which `run()` function is being used) and run on a background thread so
-the window doesn't freeze. Progress streams into the shared log panel at the
-bottom, the same messages the CLI would print.
+the window doesn't freeze. Progress streams into the tab's own log panel at
+the bottom, the same messages the CLI would print.
+
+### Variations tab
+
+Front end for `comfy_prompt_tools.generate_prompt_variations` - pick a CSV
+file and a row (or row range, e.g. `100-105`), then either check one or more
+aspects from a list populated from `prompt_aspect_vocab.json` (plus an
+optional free-text field for aspects not in that file), or switch to
+"Random aspects" and pick how many to have chosen randomly from the vocab
+file per row. Set a variation count and (optionally) a different Ollama
+model, then **Generate Variations** - same confirm-dialog-then-background-
+thread flow as the Testing tab's Run Test, writing to this project's own
+`gui_last_variations_run.json` (gitignored) and streaming progress into the
+tab's own log panel. Output lands in a `Variations` folder next to the
+input CSV, same as running the script from the command line.
 
 There's no pass/fail in any of this (see the harness project's README for
 why) - the GUI just makes it faster to build a config and watch it queue.
