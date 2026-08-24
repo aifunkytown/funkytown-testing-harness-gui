@@ -703,9 +703,17 @@ class MainWindow(QMainWindow):
         layout.addLayout(csv_row)
 
         row_row = QHBoxLayout()
-        row_row.addWidget(QLabel("Row (or range, e.g. 100-105):"))
-        self.variations_row_edit = QLineEdit()
-        row_row.addWidget(self.variations_row_edit, 1)
+        row_row.addWidget(QLabel("Min row:"))
+        self.variations_row_min_spin = QSpinBox()
+        self.variations_row_min_spin.setRange(1, 1)
+        self.variations_row_min_spin.setEnabled(False)
+        row_row.addWidget(self.variations_row_min_spin)
+        row_row.addWidget(QLabel("Max row:"))
+        self.variations_row_max_spin = QSpinBox()
+        self.variations_row_max_spin.setRange(1, 1)
+        self.variations_row_max_spin.setEnabled(False)
+        row_row.addWidget(self.variations_row_max_spin)
+        row_row.addStretch(1)
         self.variations_show_prompts_button = QPushButton("Show Prompts")
         self.variations_show_prompts_button.setEnabled(False)
         self.variations_show_prompts_button.setToolTip(
@@ -716,8 +724,7 @@ class MainWindow(QMainWindow):
         row_row.addWidget(self.variations_show_prompts_button)
         layout.addLayout(row_row)
 
-        self.variations_csv_edit.textChanged.connect(self._update_show_prompts_button_enabled)
-        self.variations_row_edit.textChanged.connect(self._update_show_prompts_button_enabled)
+        self.variations_csv_edit.textChanged.connect(self._on_variations_csv_changed)
 
         mode_row = QHBoxLayout()
         self.variations_named_radio = QRadioButton("Named aspect(s)")
@@ -799,9 +806,36 @@ class MainWindow(QMainWindow):
         if path:
             self.variations_csv_edit.setText(path)
 
-    def _update_show_prompts_button_enabled(self):
-        enabled = bool(self.variations_csv_edit.text().strip()) and bool(self.variations_row_edit.text().strip())
-        self.variations_show_prompts_button.setEnabled(enabled)
+    def _on_variations_csv_changed(self, _text=None):
+        """Whenever the CSV path changes (typed or via Browse), re-read its
+        row count and set the Min/Max row spinboxes' bounds and default
+        values to the full range - 1 to the last data row."""
+        csv_path = self.variations_csv_edit.text().strip()
+        row_count = 0
+        if csv_path and Path(csv_path).is_file():
+            try:
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    row_count = sum(1 for _ in csv.DictReader(f))
+            except OSError:
+                row_count = 0
+
+        for spin in (self.variations_row_min_spin, self.variations_row_max_spin):
+            spin.setEnabled(row_count > 0)
+        if row_count > 0:
+            self.variations_row_min_spin.setRange(1, row_count)
+            self.variations_row_max_spin.setRange(1, row_count)
+            self.variations_row_min_spin.setValue(1)
+            self.variations_row_max_spin.setValue(row_count)
+
+        self.variations_show_prompts_button.setEnabled(row_count > 0)
+
+    def _variations_row_arg(self):
+        """Min/Max row spinbox values as the "100" or "100-105" string form
+        generate_prompt_variations.parse_row_range() expects."""
+        lo, hi = self.variations_row_min_spin.value(), self.variations_row_max_spin.value()
+        if lo > hi:
+            lo, hi = hi, lo
+        return str(lo) if lo == hi else f"{lo}-{hi}"
 
     def _on_show_prompts_clicked(self):
         csv_path = self.variations_csv_edit.text().strip()
@@ -810,7 +844,7 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            row_numbers = generate_prompt_variations.parse_row_range(self.variations_row_edit.text().strip())
+            row_numbers = generate_prompt_variations.parse_row_range(self._variations_row_arg())
         except Exception as e:
             QMessageBox.warning(self, "Invalid row", str(e))
             return
@@ -872,14 +906,13 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "CSV not found", f"File not found:\n{csv_path}")
             return None
 
-        row = self.variations_row_edit.text().strip()
-        if not row:
-            QMessageBox.warning(self, "No row", "Enter a row number or range (e.g. 100 or 100-105).")
+        if not self.variations_row_min_spin.isEnabled():
+            QMessageBox.warning(self, "No rows", "The CSV file has no data rows, or hasn't loaded yet.")
             return None
 
         config = {
             "csv_path": csv_path,
-            "row": row,
+            "row": self._variations_row_arg(),
             "count": self.variations_count_spin.value(),
             "model": self.variations_model_edit.text().strip() or generate_prompt_variations.DEFAULT_MODEL,
         }
@@ -904,11 +937,31 @@ class MainWindow(QMainWindow):
 
         return config
 
+    def _aspect_values_for_confirm(self, config):
+        """Preview-only lookup (never written to the actual run config) -
+        for any named, vocab-controlled aspect the config is about to use,
+        its full list of possible values, so the confirm dialog shows what
+        the model can actually pick from."""
+        aspect_arg = config.get("aspect")
+        if not aspect_arg:
+            return {}
+        vocab, _random_exclude, _multi_select, _explicit_aspects = generate_prompt_variations.load_vocab(
+            generate_prompt_variations.DEFAULT_VOCAB_PATH
+        )
+        aspects = generate_prompt_variations.parse_aspects(aspect_arg)
+        return {a: vocab[a.lower()] for a in aspects if a.lower() in vocab and vocab[a.lower()]}
+
     def _on_generate_variations_clicked(self):
         config = self._build_variations_config()
         if config is None:
             return
-        if not self._confirm_json("Confirm variations job", config, "About to generate variations for:", "Generate"):
+
+        preview = dict(config)
+        aspect_values = self._aspect_values_for_confirm(config)
+        if aspect_values:
+            preview["aspect_values"] = aspect_values
+
+        if not self._confirm_json("Confirm variations job", preview, "About to generate variations for:", "Generate"):
             return
 
         GUI_VARIATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
