@@ -38,7 +38,7 @@ from PySide6.QtWidgets import (
 
 from funkytown_testing_harness.lora_test import run as run_lora_test
 from funkytown_testing_harness.run_test import run as run_model_test
-from comfy_prompt_tools import generate_prompt_variations
+from comfy_prompt_tools import generate_prompt_variations, rerun_prompts_comfyui
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
@@ -212,9 +212,34 @@ class MainWindow(QMainWindow):
         row.addWidget(refresh_button)
         layout.addLayout(row)
 
+        strip_row = QHBoxLayout()
         self.strip_loras_check = QCheckBox("Strip LoRAs (clear the Power Lora Loader node)")
-        self.strip_loras_check.setToolTip("Model tab only - lora_test.py needs the LoRA slots to stay present.")
-        layout.addWidget(self.strip_loras_check)
+        self.strip_loras_check.setToolTip(
+            "Model tab only - lora_test.py needs the LoRA slots to stay present.\n\n"
+            "This only clears the LoRA slots in the workflow this test queues right "
+            "now. It does NOT stop rerun_prompts_comfyui.py's own keyword-based "
+            "routing (lora_rules.json / lora_rules.local.json) from turning a LoRA "
+            "back on later, if you rerun an exported prompt whose text contains one "
+            "of its keywords - see \"LoRA keyword rules...\"."
+        )
+        strip_row.addWidget(self.strip_loras_check)
+        strip_row.addStretch(1)
+        lora_rules_button = QPushButton("LoRA keyword rules...")
+        lora_rules_button.setToolTip(
+            "Shows rerun_prompts_comfyui.py's current keyword -> LoRA rules. These "
+            "apply whenever a prompt is rerun through that script, regardless of "
+            "whether Strip LoRAs was used for the original test."
+        )
+        lora_rules_button.clicked.connect(self._show_lora_rules)
+        strip_row.addWidget(lora_rules_button)
+        layout.addLayout(strip_row)
+
+        layout.addWidget(QLabel(
+            "Note: Strip LoRAs above only affects this test's own queued workflow. "
+            "If a prompt from this run gets exported and later rerun via "
+            "rerun_prompts_comfyui.py, its keyword rules (\"LoRA keyword rules...\") "
+            "can still turn a matching LoRA back on based on the prompt text."
+        ))
 
         layout.addWidget(QLabel("Positive prompt override (leave blank to use the workflow's own):"))
         self.prompt_edit = QPlainTextEdit()
@@ -222,6 +247,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.prompt_edit)
 
         return group
+
+    def _show_lora_rules(self):
+        if not rerun_prompts_comfyui.LORA_RULES:
+            text = (
+                "No keyword -> LoRA rules configured.\n\n"
+                "lora_rules.json is empty and no lora_rules.local.json was found "
+                "next to it in comfy-prompt-tools - add one there for personal rules."
+            )
+        else:
+            text = "\n".join(
+                f"[{', '.join(rule['keywords'])}] -> {rule['lora']} @ strength {rule['strength']}"
+                for rule in rerun_prompts_comfyui.LORA_RULES
+            )
+        self._show_text_dialog("rerun_prompts_comfyui.py keyword -> LoRA rules", text)
 
     def _refresh_workflow_list(self):
         current = self.workflow_combo.currentText()

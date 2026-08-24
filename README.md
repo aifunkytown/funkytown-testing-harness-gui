@@ -50,7 +50,13 @@ prompt variations for one CSV row via Ollama).
   files found in your ComfyUI installation's `user/default/workflows` folder
   (configured in Settings), plus a positive-prompt override box. The Strip
   LoRAs checkbox only applies on the Model tab (it's disabled on the LoRA
-  tab, since a LoRA run needs those slots to stay present).
+  tab, since a LoRA run needs those slots to stay present) - it only clears
+  LoRA slots in *this run's* queued workflow, though, not anything
+  downstream: **LoRA keyword rules...** next to it shows
+  `comfy-prompt-tools/rerun_prompts_comfyui.py`'s current keyword -> LoRA
+  routing (`lora_rules.json`/`lora_rules.local.json`), which independently
+  turns a matching LoRA back on based on prompt text whenever a prompt is
+  later rerun through that script.
 - **Model tab** - pick a model from a live-queried dropdown (from ComfyUI's
   `/object_info`) and "Add to list" builds up the model list - this is the
   *only* place model selection happens, for both a Models-only comparison
