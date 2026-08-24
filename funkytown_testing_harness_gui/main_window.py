@@ -91,7 +91,7 @@ class MainWindow(QMainWindow):
         run_row.addWidget(self.run_button, 1)
         save_test_button = QPushButton("Save Test...")
         save_test_button.clicked.connect(self._file_save)
-        run_row.addWidget(save_test_button)
+        run_row.addWidget(save_test_button, 1)
         root.addLayout(run_row)
 
         self.log_view = QPlainTextEdit()
