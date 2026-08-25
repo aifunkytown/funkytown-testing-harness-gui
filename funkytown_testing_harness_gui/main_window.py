@@ -107,8 +107,8 @@ class MainWindow(QMainWindow):
 
     def _build_menu_bar(self):
         file_menu = self.menuBar().addMenu("&File")
-        file_menu.addAction("&Save...", self._file_save)
-        file_menu.addAction("&Import...", self._file_import)
+        file_menu.addAction("&Save Test...", self._file_save)
+        file_menu.addAction("&Import Test...", self._file_import)
 
     # ---- outer "Testing" tab: everything that existed before the Variations tab ----
 

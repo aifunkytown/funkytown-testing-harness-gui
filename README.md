@@ -90,15 +90,15 @@ prompt variations for one CSV row via Ollama).
   JSON that's about to be submitted, so you can check it over - Run to
   proceed, Cancel to back out and adjust something first. **Save Test...**
   sits next to Run Test and writes the same combined config to a file
-  instead of running it (same as `File > Save...` below).
+  instead of running it (same as `File > Save Test...` below).
 - **Settings window** - ComfyUI server URL, ComfyUI installation folder (for
   the workflow dropdown), and optional overrides for where
   `funkytown-testing-harness` and `comfy-prompt-tools` live if they aren't
   sibling directories.
-- **File menu** - `File > Save...` writes the *combined* current state of
+- **File menu** - `File > Save Test...` writes the *combined* current state of
   both the Model tab and the LoRA tab together to one JSON file (defaults
   to `funkytown-testing-harness`'s `configs/` folder). If both tabs are
-  empty it shows an error and writes nothing. `File > Import...` reads a
+  empty it shows an error and writes nothing. `File > Import Test...` reads a
   JSON file back in and populates both tabs from it - each side only
   touches its own tab's data, and only if the file actually has that
   key, so importing an older single-schema file (just `"models"`, or just
