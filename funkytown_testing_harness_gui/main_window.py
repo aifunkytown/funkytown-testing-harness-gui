@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
@@ -31,6 +32,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -39,6 +42,7 @@ from PySide6.QtWidgets import (
 from funkytown_testing_harness.lora_test import run as run_lora_test
 from funkytown_testing_harness.run_test import run as run_model_test
 from comfy_prompt_tools import generate_prompt_variations, rerun_prompts_comfyui
+from comfy_prompt_tools.local_config import load_named_list, local_path_for
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
@@ -213,32 +217,32 @@ class MainWindow(QMainWindow):
         layout.addLayout(row)
 
         strip_row = QHBoxLayout()
-        self.strip_loras_check = QCheckBox("Strip LoRAs (clear the Power Lora Loader node)")
-        self.strip_loras_check.setToolTip(
+        self.use_default_loras_check = QCheckBox("Use Default LoRAs (keep the workflow's own Power Lora Loader setup)")
+        self.use_default_loras_check.setToolTip(
             "Model tab only - lora_test.py needs the LoRA slots to stay present.\n\n"
-            "This only clears the LoRA slots in the workflow this test queues right "
-            "now. It does NOT stop rerun_prompts_comfyui.py's own keyword-based "
-            "routing (lora_rules.json / lora_rules.local.json) from turning a LoRA "
-            "back on later, if you rerun an exported prompt whose text contains one "
-            "of its keywords - see \"LoRA keyword rules...\"."
+            "Checked: leave the workflow's Power Lora Loader node exactly as it "
+            "already is. Unchecked (default): clear it for this test's queued "
+            "workflow only. Either way, this has no effect on "
+            "rerun_prompts_comfyui.py's own keyword-based routing (lora_rules.json "
+            "/ lora_rules.local.json) - see \"Edit LoRA Rules...\"."
         )
-        strip_row.addWidget(self.strip_loras_check)
+        strip_row.addWidget(self.use_default_loras_check)
         strip_row.addStretch(1)
-        lora_rules_button = QPushButton("LoRA keyword rules...")
+        lora_rules_button = QPushButton("Edit LoRA Rules...")
         lora_rules_button.setToolTip(
-            "Shows rerun_prompts_comfyui.py's current keyword -> LoRA rules. These "
-            "apply whenever a prompt is rerun through that script, regardless of "
-            "whether Strip LoRAs was used for the original test."
+            "View and edit rerun_prompts_comfyui.py's current keyword -> LoRA "
+            "rules. These apply whenever a prompt is rerun through that script, "
+            "regardless of the Use Default LoRAs setting above."
         )
-        lora_rules_button.clicked.connect(self._show_lora_rules)
+        lora_rules_button.clicked.connect(self._edit_lora_rules)
         strip_row.addWidget(lora_rules_button)
         layout.addLayout(strip_row)
 
         layout.addWidget(QLabel(
-            "Note: Strip LoRAs above only affects this test's own queued workflow. "
-            "If a prompt from this run gets exported and later rerun via "
-            "rerun_prompts_comfyui.py, its keyword rules (\"LoRA keyword rules...\") "
-            "can still turn a matching LoRA back on based on the prompt text."
+            "Note: Use Default LoRAs above only affects this test's own queued "
+            "workflow. If a prompt from this run gets exported and later rerun "
+            "via rerun_prompts_comfyui.py, its keyword rules (\"Edit LoRA "
+            "Rules...\") can still turn a matching LoRA on based on the prompt text."
         ))
 
         layout.addWidget(QLabel("Positive prompt override (leave blank to use the workflow's own):"))
@@ -248,19 +252,101 @@ class MainWindow(QMainWindow):
 
         return group
 
-    def _show_lora_rules(self):
-        if not rerun_prompts_comfyui.LORA_RULES:
-            text = (
-                "No keyword -> LoRA rules configured.\n\n"
-                "lora_rules.json is empty and no lora_rules.local.json was found "
-                "next to it in comfy-prompt-tools - add one there for personal rules."
-            )
-        else:
-            text = "\n".join(
-                f"[{', '.join(rule['keywords'])}] -> {rule['lora']} @ strength {rule['strength']}"
-                for rule in rerun_prompts_comfyui.LORA_RULES
-            )
-        self._show_text_dialog("rerun_prompts_comfyui.py keyword -> LoRA rules", text)
+    def _edit_lora_rules(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Edit LoRA Rules")
+        dialog.setMinimumSize(560, 420)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            "Keyword -> LoRA rules for rerun_prompts_comfyui.py. Keywords are "
+            "comma-separated and matched case-insensitively against prompt text - "
+            "if any keyword in a row matches, that row's LoRA is turned on at the "
+            "given strength. Saving writes these to a gitignored "
+            "lora_rules.local.json next to lora_rules.json in comfy-prompt-tools, "
+            "so they're never committed."
+        ))
+
+        table = QTableWidget(0, 3)
+        table.setHorizontalHeaderLabels(["Keywords (comma-separated)", "LoRA filename", "Strength"])
+        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        for rule in rerun_prompts_comfyui.LORA_RULES:
+            row = table.rowCount()
+            table.insertRow(row)
+            table.setItem(row, 0, QTableWidgetItem(", ".join(rule["keywords"])))
+            table.setItem(row, 1, QTableWidgetItem(rule["lora"]))
+            table.setItem(row, 2, QTableWidgetItem(str(rule["strength"])))
+        layout.addWidget(table, 1)
+
+        buttons_row = QHBoxLayout()
+        add_button = QPushButton("Add rule")
+        add_button.clicked.connect(lambda: self._add_lora_rule_row(table))
+        buttons_row.addWidget(add_button)
+        remove_button = QPushButton("Remove selected")
+        remove_button.clicked.connect(lambda: self._remove_selected_lora_rule_rows(table))
+        buttons_row.addWidget(remove_button)
+        layout.addLayout(buttons_row)
+
+        dialog_buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        dialog_buttons.rejected.connect(dialog.reject)
+
+        def try_save():
+            rules, errors = self._parse_lora_rules_table(table)
+            if errors:
+                QMessageBox.warning(dialog, "Invalid LoRA rules", "\n".join(errors))
+                return
+            dialog._saved_rules = rules
+            dialog.accept()
+
+        dialog_buttons.accepted.connect(try_save)
+        layout.addWidget(dialog_buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        local_path = local_path_for(rerun_prompts_comfyui.LORA_RULES_PATH)
+        local_path.write_text(json.dumps({"rules": dialog._saved_rules}, indent=2), encoding="utf-8")
+        rerun_prompts_comfyui.LORA_RULES = load_named_list(rerun_prompts_comfyui.LORA_RULES_PATH, "rules", "lora")
+        self._log(f"Saved LoRA rules to {local_path}")
+
+    def _add_lora_rule_row(self, table):
+        row = table.rowCount()
+        table.insertRow(row)
+        table.setItem(row, 0, QTableWidgetItem(""))
+        table.setItem(row, 1, QTableWidgetItem(""))
+        table.setItem(row, 2, QTableWidgetItem("1.0"))
+
+    def _remove_selected_lora_rule_rows(self, table):
+        for row in sorted({index.row() for index in table.selectedIndexes()}, reverse=True):
+            table.removeRow(row)
+
+    def _parse_lora_rules_table(self, table):
+        rules = []
+        errors = []
+        for row in range(table.rowCount()):
+            keywords_text = (table.item(row, 0).text() if table.item(row, 0) else "").strip()
+            lora = (table.item(row, 1).text() if table.item(row, 1) else "").strip()
+            strength_text = (table.item(row, 2).text() if table.item(row, 2) else "").strip()
+
+            if not keywords_text and not lora and not strength_text:
+                continue  # skip a fully-blank row rather than erroring on it
+
+            keywords = [k.strip() for k in keywords_text.split(",") if k.strip()]
+            if not keywords:
+                errors.append(f"Row {row + 1}: at least one keyword is required.")
+                continue
+            if not lora:
+                errors.append(f"Row {row + 1}: LoRA filename is required.")
+                continue
+            try:
+                strength = float(strength_text)
+            except ValueError:
+                errors.append(f"Row {row + 1}: strength must be a number, got '{strength_text}'.")
+                continue
+
+            rules.append({"keywords": keywords, "lora": lora, "strength": strength})
+        return rules, errors
 
     def _refresh_workflow_list(self):
         current = self.workflow_combo.currentText()
@@ -313,7 +399,7 @@ class MainWindow(QMainWindow):
         # strip_loras only applies to run_test.py - lora_test.py's
         # build_template() never reads it, and stripping would remove the
         # very slots a LoRA run needs to toggle.
-        self.strip_loras_check.setEnabled(index == MODELS_TAB_INDEX)
+        self.use_default_loras_check.setEnabled(index == MODELS_TAB_INDEX)
 
     # ---- models tab -------------------------------------------------------
 
@@ -418,7 +504,7 @@ class MainWindow(QMainWindow):
         return {
             "name": self.name_edit.text().strip() or "model_testing",
             "source_workflow": self.workflow_combo.currentText().strip(),
-            "strip_loras": self.strip_loras_check.isChecked(),
+            "strip_loras": not self.use_default_loras_check.isChecked(),
             "positive_prompt": self.prompt_edit.toPlainText().strip(),
             "server": self.settings["server"],
             "models": [
@@ -641,7 +727,7 @@ class MainWindow(QMainWindow):
             "server": self.settings["server"],
         }
         if self._models:
-            config["strip_loras"] = self.strip_loras_check.isChecked()
+            config["strip_loras"] = not self.use_default_loras_check.isChecked()
             config["models"] = [
                 {"model": model_name, "configs": configs}
                 for model_name, configs in self._models.items()
@@ -697,7 +783,7 @@ class MainWindow(QMainWindow):
             self._models = {m["model"]: m.get("configs") or [{}] for m in config["models"]}
             self._rebuild_models_list()
             if "strip_loras" in config:
-                self.strip_loras_check.setChecked(bool(config["strip_loras"]))
+                self.use_default_loras_check.setChecked(not bool(config["strip_loras"]))
 
         if "loras" in config:
             self._loras = {entry["lora"]: entry.get("weights") or [1.0] for entry in config["loras"]}
