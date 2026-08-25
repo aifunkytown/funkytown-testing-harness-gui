@@ -15,6 +15,7 @@ gui_settings.json
 gui_last_model_run.json
 gui_last_lora_run.json
 gui_last_variations_run.json
+gui_last_queue_variations_run.json
 
 # Editor/OS cruft
 .vscode/

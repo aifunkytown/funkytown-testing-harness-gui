@@ -62,6 +62,7 @@ GUI_PROJECT_ROOT = Path(__file__).resolve().parent.parent
 GUI_MODEL_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_model_run.json"
 GUI_LORA_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_lora_run.json"
 GUI_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_variations_run.json"
+GUI_QUEUE_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_queue_variations_run.json"
 
 MODELS_TAB_INDEX = 0
 LORA_TAB_INDEX = 1
@@ -79,6 +80,7 @@ class MainWindow(QMainWindow):
         self._runner_thread = None
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
         self._defaults_thread = None
+        self._last_variations_output_paths = []  # set on each successful Generate Variations run
 
         self._build_menu_bar()
 
@@ -893,9 +895,20 @@ class MainWindow(QMainWindow):
         settings_row.addWidget(self.variations_model_edit, 1)
         layout.addLayout(settings_row)
 
+        generate_row = QHBoxLayout()
         self.variations_generate_button = QPushButton("Generate Variations")
         self.variations_generate_button.clicked.connect(self._on_generate_variations_clicked)
-        layout.addWidget(self.variations_generate_button)
+        generate_row.addWidget(self.variations_generate_button, 1)
+        self.variations_queue_button = QPushButton("Queue Generated Variations")
+        self.variations_queue_button.setEnabled(False)
+        self.variations_queue_button.setToolTip(
+            "Submits the CSV file(s) the most recent successful Generate Variations "
+            "run wrote, to ComfyUI via rerun_prompts_comfyui.py - using the Testing "
+            "tab's Source workflow and Settings' ComfyUI server."
+        )
+        self.variations_queue_button.clicked.connect(self._on_queue_variations_clicked)
+        generate_row.addWidget(self.variations_queue_button, 1)
+        layout.addLayout(generate_row)
 
         self.variations_log_view = QPlainTextEdit()
         self.variations_log_view.setReadOnly(True)
@@ -1090,6 +1103,7 @@ class MainWindow(QMainWindow):
             return
 
         GUI_VARIATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._pending_variations_output_paths = self._expected_variations_output_paths(config)
 
         self.variations_log_view.clear()
         self.variations_generate_button.setEnabled(False)
@@ -1101,13 +1115,85 @@ class MainWindow(QMainWindow):
         self._variations_thread.finished_error.connect(self._on_variations_finished_error)
         self._variations_thread.start()
 
+    def _expected_variations_output_paths(self, config):
+        """Same output-path formula as generate_prompt_variations.run_batch()
+        (only reachable there via a stdout "Wrote ... to ..." line, which
+        isn't something to depend on for hooking up Queue Generated
+        Variations) - recomputed here from the same csv_path/row inputs, so
+        it stays correct if that formula ever changes."""
+        csv_path = Path(config["csv_path"])
+        row_numbers = generate_prompt_variations.parse_row_range(config["row"])
+        variations_dir = csv_path.parent / "Variations"
+        return [variations_dir / f"{csv_path.stem}_row{row_num}_variations.csv" for row_num in row_numbers]
+
     def _on_variations_finished_ok(self):
         self.variations_generate_button.setEnabled(True)
         self.variations_generate_button.setText("Generate Variations")
         self.variations_log_view.appendPlainText("Done.")
+        self._last_variations_output_paths = self._pending_variations_output_paths
+        self.variations_queue_button.setEnabled(True)
 
     def _on_variations_finished_error(self, message):
         self.variations_generate_button.setEnabled(True)
         self.variations_generate_button.setText("Generate Variations")
         self.variations_log_view.appendPlainText(f"ERROR: {message}")
         QMessageBox.critical(self, "Generation failed", message)
+
+    def _on_queue_variations_clicked(self):
+        if not self._last_variations_output_paths:
+            QMessageBox.warning(self, "Nothing to queue", "Run Generate Variations successfully first.")
+            return
+
+        workflow_name = self.workflow_combo.currentText().strip()
+        if not workflow_name:
+            QMessageBox.warning(self, "No workflow selected", "Pick a source workflow on the Testing tab first.")
+            return
+        comfyui_install_dir = self.settings.get("comfyui_install_dir")
+        if not comfyui_install_dir:
+            QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
+            return
+        workflow_path = Path(comfyui_install_dir) / "user" / "default" / "workflows" / workflow_name
+        if not workflow_path.is_file():
+            QMessageBox.warning(self, "Workflow not found", f"File not found:\n{workflow_path}")
+            return
+
+        missing = [p for p in self._last_variations_output_paths if not p.is_file()]
+        if missing:
+            QMessageBox.warning(
+                self, "Output file(s) missing",
+                "File(s) from the last Generate Variations run weren't found (maybe "
+                "moved or deleted):\n" + "\n".join(str(p) for p in missing),
+            )
+            return
+
+        config = {
+            "csv_paths": [str(p) for p in self._last_variations_output_paths],
+            "workflow": str(workflow_path),
+            "server": self.settings["server"],
+        }
+
+        if not self._confirm_json("Confirm queue job", config, "About to queue these file(s) to ComfyUI:", "Queue"):
+            return
+
+        GUI_QUEUE_VARIATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+        self.variations_log_view.appendPlainText("\n--- Queuing generated variations ---")
+        self.variations_queue_button.setEnabled(False)
+        self.variations_queue_button.setText("Queuing...")
+
+        self._queue_variations_thread = TestRunnerThread(rerun_prompts_comfyui.run, GUI_QUEUE_VARIATIONS_RUN_CONFIG_PATH, self)
+        self._queue_variations_thread.log_line.connect(self.variations_log_view.appendPlainText)
+        self._queue_variations_thread.finished_ok.connect(self._on_queue_variations_finished_ok)
+        self._queue_variations_thread.finished_error.connect(self._on_queue_variations_finished_error)
+        self._queue_variations_thread.start()
+
+    def _on_queue_variations_finished_ok(self):
+        self.variations_queue_button.setEnabled(True)
+        self.variations_queue_button.setText("Queue Generated Variations")
+        self.variations_log_view.appendPlainText("Done.")
+
+    def _on_queue_variations_finished_error(self, message):
+        self.variations_queue_button.setEnabled(True)
+        self.variations_queue_button.setText("Queue Generated Variations")
+        self.variations_log_view.appendPlainText(f"ERROR: {message}")
+        QMessageBox.critical(self, "Queue failed", message)

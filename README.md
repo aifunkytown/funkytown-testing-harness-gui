@@ -139,6 +139,17 @@ streams progress into the tab's own log panel. Output lands in a
 `Variations` folder next to the input CSV, same as running the script from
 the command line.
 
+Once a Generate Variations run finishes successfully, **Queue Generated
+Variations** (disabled until then) submits exactly the output file(s) that
+run just wrote to ComfyUI via `comfy_prompt_tools.rerun_prompts_comfyui`,
+using the Testing tab's Source workflow (resolved to a local file under
+your ComfyUI installation's `user/default/workflows` folder) and Settings'
+ComfyUI server - same confirm-dialog-then-background-thread flow, sharing
+the tab's log panel, writing to a gitignored
+`gui_last_queue_variations_run.json`. It always refers to the most recently
+*successful* Generate Variations run - starting a new one before queuing
+the previous one just replaces what Queue would submit next.
+
 There's no pass/fail in any of this (see the harness project's README for
 why) - the GUI just makes it faster to build a config and watch it queue.
 
