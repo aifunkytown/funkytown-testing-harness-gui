@@ -1,0 +1,6 @@
+[submodule "funkytown-testing-harness"]
+	path = funkytown-testing-harness
+	url = https://github.com/aifunkytown/funkytown-testing-harness.git
+[submodule "comfy-prompt-tools"]
+	path = comfy-prompt-tools
+	url = https://github.com/aifunkytown/comfy-prompt-tools.git

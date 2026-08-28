@@ -11,10 +11,30 @@ line.
 ## Setup
 
 This project imports `funkytown_testing_harness` directly rather than
-installing it as a package, so it expects that project checked out as a
-**sibling directory** next to this one (which in turn expects
-`comfy-prompt-tools` as its own sibling). The parent folder can be
-named/located anything you like - only the sibling relationship matters:
+installing it as a package, and that project in turn imports
+`comfy-prompt-tools` the same way - so both need to be on disk somewhere
+this project can find them. Two ways to get all 3 repos in one shot instead
+of three separate `git clone`s:
+
+**Option A - one clone, with submodules** (`funkytown-testing-harness` and
+`comfy-prompt-tools` come along nested inside this repo):
+
+```bash
+git clone --recurse-submodules https://github.com/aifunkytown/funkytown-testing-harness-gui.git
+```
+
+The submodules are pinned to whatever commit this repo's submodule
+references currently point at - not automatically each repo's latest. Pull
+the newest commit from each submodule's own default branch with:
+
+```bash
+git submodule update --remote --merge
+```
+
+**Option B - three clones, sibling layout** (the original way; useful if
+you want each repo independently up to date without the submodule-pinning
+behavior above). The parent folder can be named/located anything you like -
+only the sibling relationship matters:
 
 ```
 your-workspace/
@@ -22,6 +42,11 @@ your-workspace/
 ├── funkytown-testing-harness/
 └── funkytown-testing-harness-gui/
 ```
+
+Either way, this project auto-detects which layout it's in (sibling
+directories are checked first, so an existing Option B setup keeps working
+even after submodules were added) - or override the location of either
+dependency in Settings if you keep them somewhere else entirely.
 
 ```bash
 pip install PySide6
