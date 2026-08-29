@@ -73,9 +73,18 @@ prompt variations for one CSV row via Ollama).
 
 - **Workflow selector** (shared, top of the tab) - dropdown of workflow
   files found in your ComfyUI installation's `user/default/workflows` folder
-  (configured in Settings), plus a positive-prompt override box. The **Use
-  Default LoRAs** checkbox only applies on the Model tab (it's disabled on
-  the LoRA tab, since a LoRA run needs those slots to stay present) -
+  (configured in Settings), plus a prompt source toggle: **Single prompt
+  override** (a free-text box, blank to use the workflow's own prompt - the
+  original behavior) or **Prompts from CSV**, which sweeps every prompt in
+  a CSV file across whatever's configured on the Model/LoRA tabs - e.g. 2
+  models x 4 LoRA combinations x 10 prompt rows queues 80 runs. Selecting a
+  CSV enables **Min row**/**Max row** counters (set to its full row range
+  by default) and **Show Prompts** (previews each selected row's resolved
+  text - Cleaned Prompt if present, otherwise Positive Prompt - the same
+  CSV/row-picker pattern as the Variations tab's, and requires
+  `funkytown-testing-harness`'s `"positive_prompts"` config support). The
+  **Use Default LoRAs** checkbox only applies on the Model tab (it's
+  disabled on the LoRA tab, since a LoRA run needs those slots to stay present) -
   unchecked by default, meaning this run's queued workflow gets its Power
   Lora Loader node cleared; check it to leave the workflow's own LoRA setup
   as-is instead. Either way this only affects *this run's* queued workflow,
@@ -130,7 +139,11 @@ prompt variations for one CSV row via Ollama).
   `"loras"`) combines into whatever's already on the other tab instead of
   wiping it out. An older lora_test.py config's singular `"model"` key (no
   `"models"` list) is folded into the Model tab's list the same way, since
-  there's no separate LoRA-tab model field to hold it any more.
+  there's no separate LoRA-tab model field to hold it any more. Also saves
+  and restores which prompt-source mode was active - `"positive_prompt"`
+  for Single prompt override, or `"positive_prompts_csv"` plus
+  `"positive_prompts_min_row"`/`"positive_prompts_max_row"` for Prompts
+  from CSV.
 
 After confirming, the assembled config is written to this project's own
 `gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending
