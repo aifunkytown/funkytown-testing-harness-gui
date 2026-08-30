@@ -38,9 +38,13 @@ class LoraWeightsDialog(QDialog):
 
         add_row = QHBoxLayout()
         self.new_weight_spin = QDoubleSpinBox()
-        self.new_weight_spin.setRange(-10.0, 10.0)
-        self.new_weight_spin.setSingleStep(0.1)
-        self.new_weight_spin.setValue(1.0)
+        # Range's minimum is reserved as a "nothing entered yet" sentinel
+        # (shown blank via setSpecialValueText) so the box doesn't default
+        # to a specific weight - -10.0 itself stays enterable as a real value.
+        self.new_weight_spin.setRange(-10.1, 10.0)
+        self.new_weight_spin.setSingleStep(1.0)
+        self.new_weight_spin.setSpecialValueText(" ")
+        self.new_weight_spin.setValue(self.new_weight_spin.minimum())
         add_row.addWidget(self.new_weight_spin, 1)
         add_button = QPushButton("+ Add weight")
         add_button.clicked.connect(self._add_weight)
@@ -57,7 +61,11 @@ class LoraWeightsDialog(QDialog):
         layout.addWidget(buttons)
 
     def _add_weight(self):
+        if self.new_weight_spin.value() <= self.new_weight_spin.minimum():
+            QMessageBox.information(self, "No weight entered", "Enter a weight value first.")
+            return
         self.weights_list.addItem(QListWidgetItem(str(self.new_weight_spin.value())))
+        self.new_weight_spin.setValue(self.new_weight_spin.minimum())
 
     def _remove_selected_weight(self):
         if self.weights_list.count() <= 1:

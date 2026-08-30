@@ -6,6 +6,7 @@ their own CLIs do, so behavior is identical either way.
 """
 
 import csv
+import datetime
 import json
 from pathlib import Path
 
@@ -35,6 +36,7 @@ from PySide6.QtWidgets import (
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -81,6 +83,7 @@ class MainWindow(QMainWindow):
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
         self._defaults_thread = None
         self._last_variations_output_paths = []  # set on each successful Generate Variations run
+        self._last_test_config_path = None  # set on each successful Save Test.../Import Test...
 
         self._build_menu_bar()
 
@@ -110,6 +113,21 @@ class MainWindow(QMainWindow):
         file_menu.addAction("&Save Test...", self._file_save)
         file_menu.addAction("&Import Test...", self._file_import)
 
+        settings_menu = self.menuBar().addMenu("&Settings")
+        self.hide_explicit_action = settings_menu.addAction("Hide Explicit")
+        self.hide_explicit_action.setCheckable(True)
+        self.hide_explicit_action.setChecked(bool(self.settings.get("hide_explicit_aspects", True)))
+        self.hide_explicit_action.setToolTip(
+            "Hide aspects prompt_aspect_vocab.json marks as explicit (_explicit_aspects) "
+            "from the Variations tab's aspect checklist."
+        )
+        self.hide_explicit_action.toggled.connect(self._on_hide_explicit_toggled)
+
+    def _on_hide_explicit_toggled(self, checked):
+        self.settings["hide_explicit_aspects"] = checked
+        save_settings(self.settings)
+        self._populate_variations_aspect_list()
+
     # ---- outer "Testing" tab: everything that existed before the Variations tab ----
 
     def _build_testing_tab(self):
@@ -137,10 +155,44 @@ class MainWindow(QMainWindow):
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         self.log_view.setMaximumBlockCount(5000)
-        layout.addWidget(QLabel("Log:"))
-        layout.addWidget(self.log_view, 1)
+        self._add_collapsible_log(page, layout, self.log_view)
 
         return page
+
+    def _add_collapsible_log(self, page, layout, log_view):
+        """Adds a collapsible "Log" section: a small clickable arrow that
+        toggles log_view's visibility, collapsed by default.
+
+        log_view floats as an overlay on top of `page` instead of being
+        managed by `layout` - a widget newly added to a QVBoxLayout's
+        space forces Qt to grow the top-level window to satisfy its
+        minimum size (even overriding an explicit resize() back, since the
+        layout just re-clamps it), which is exactly the window-move this
+        was asked not to do. As a plain floating child, expanding it can
+        only overlay whatever's below the toggle button within the
+        window's current bounds - overflowing past them if there isn't
+        room is fine; the window itself never resizes to compensate."""
+        toggle_button = QToolButton()
+        toggle_button.setArrowType(Qt.RightArrow)
+        toggle_button.setText("Log")
+        toggle_button.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        toggle_button.setCheckable(True)
+        toggle_button.setChecked(False)
+        toggle_button.setAutoRaise(True)
+        layout.addWidget(toggle_button)
+
+        log_view.setParent(page)
+        log_view.setVisible(False)
+
+        def on_toggled(checked):
+            toggle_button.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
+            if checked:
+                top_left = toggle_button.mapTo(page, toggle_button.rect().bottomLeft())
+                log_view.setGeometry(0, top_left.y(), page.width(), 220)
+                log_view.raise_()
+            log_view.setVisible(checked)
+
+        toggle_button.toggled.connect(on_toggled)
 
     # ---- top bar (name, server status, settings) -------------------------
 
@@ -331,6 +383,10 @@ class MainWindow(QMainWindow):
         table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        # A single click starts editing immediately, rather than needing a
+        # double-click or F2 first - Qt's default item delegate already
+        # commits on Enter or on the editor losing focus (clicking away).
+        table.itemClicked.connect(table.editItem)
         for rule in rerun_prompts_comfyui.LORA_RULES:
             row = table.rowCount()
             table.insertRow(row)
@@ -818,6 +874,19 @@ class MainWindow(QMainWindow):
             ]
         return config
 
+    def _suggested_test_filename(self):
+        """Default filename for Save Test... when there's no previous
+        saved/imported path to default to instead - the selected models
+        plus today's date, e.g. "modelA_modelB_2026-08-29.json"."""
+        model_stems = [Path(m).stem for m in self._models.keys()]
+        if len(model_stems) > 3:
+            models_part = "_".join(model_stems[:3]) + f"_and{len(model_stems) - 3}more"
+        elif model_stems:
+            models_part = "_".join(model_stems)
+        else:
+            models_part = "test"
+        return f"{models_part}_{datetime.date.today().isoformat()}.json"
+
     def _file_save(self):
         if not self._models and not self._loras:
             QMessageBox.critical(
@@ -831,12 +900,14 @@ class MainWindow(QMainWindow):
             config.pop("positive_prompt", None)
 
         CONFIGS_DIR.mkdir(exist_ok=True)
+        default_path = self._last_test_config_path or (CONFIGS_DIR / self._suggested_test_filename())
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save test config", str(CONFIGS_DIR / "combined-testing-config.json"), "JSON files (*.json)"
+            self, "Save test config", str(default_path), "JSON files (*.json)"
         )
         if not path:
             return
         Path(path).write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._last_test_config_path = Path(path)
         self._log(f"Saved config to {path}")
 
     def _file_import(self):
@@ -886,6 +957,7 @@ class MainWindow(QMainWindow):
                     self._models[model_name] = [{}]
                     self._rebuild_models_list()
 
+        self._last_test_config_path = Path(path)
         self._log(f"Imported config from {path}")
 
     # ---- shared log -----------------------------------------------------------
@@ -997,8 +1069,7 @@ class MainWindow(QMainWindow):
         self.variations_log_view = QPlainTextEdit()
         self.variations_log_view.setReadOnly(True)
         self.variations_log_view.setMaximumBlockCount(5000)
-        layout.addWidget(QLabel("Log:"))
-        layout.addWidget(self.variations_log_view, 1)
+        self._add_collapsible_log(page, layout, self.variations_log_view)
 
         return page
 
@@ -1007,7 +1078,10 @@ class MainWindow(QMainWindow):
         vocab, _random_exclude, _multi_select, explicit_aspects = generate_prompt_variations.load_vocab(
             generate_prompt_variations.DEFAULT_VOCAB_PATH
         )
+        hide_explicit = bool(self.settings.get("hide_explicit_aspects", True))
         for aspect_name in sorted(vocab):
+            if hide_explicit and aspect_name in explicit_aspects:
+                continue
             label = aspect_name + (" (explicit)" if aspect_name in explicit_aspects else "")
             item = QListWidgetItem(label)
             item.setData(Qt.UserRole, aspect_name)

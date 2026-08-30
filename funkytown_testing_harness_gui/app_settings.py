@@ -13,6 +13,7 @@ DEFAULTS = {
     "comfyui_install_dir": "",
     "funkytown_testing_harness_dir": "",  # blank = auto-detect sibling directory
     "comfy_prompt_tools_dir": "",  # blank = let funkytown_testing_harness auto-detect its own sibling
+    "hide_explicit_aspects": True,  # Settings > Hide Explicit - hides prompt_aspect_vocab.json's _explicit_aspects from the Variations tab's checklist
 }
 
 
