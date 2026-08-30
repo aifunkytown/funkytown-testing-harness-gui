@@ -58,9 +58,10 @@ project root - see "Launcher exe" below.
 
 ## What it does
 
-The window has two top-level tabs: **Testing** (build and run a
-model-comparison or LoRA-weight-sweep config) and **Variations** (generate
-prompt variations for one CSV row via Ollama).
+The window has three top-level tabs: **Testing** (build and run a
+model-comparison or LoRA-weight-sweep config), **Variations** (generate
+prompt variations for one CSV row via Ollama), and **Results** (browse
+previous runs' output images).
 
 - **First-run setup** - until a ComfyUI installation folder is configured,
   startup tries to infer one from a running ComfyUI server's own launch
@@ -222,6 +223,31 @@ the previous one just replaces what Queue would submit next.
 
 There's no pass/fail in any of this (see the harness project's README for
 why) - the GUI just makes it faster to build a config and watch it queue.
+
+### Results tab
+
+Lists every logged run from `funkytown-testing-harness`'s `runs/` folder,
+newest first - both Model/LoRA test runs (`run_test.py`/`lora_test.py`) and
+Variations runs that were queued to ComfyUI (a "Queue Generated Variations"
+run writes its own log there too, alongside the Testing tab's, instead of
+the single shared `rerun_log.csv` `rerun_prompts_comfyui.py` normally
+overwrites on every invocation - so each queue run gets its own permanent
+entry here). Each entry shows how many prompts it queued; **Refresh**
+re-scans the folder (also done automatically after Run Test or Queue
+Generated Variations finishes), and double-clicking one (or **Open
+selected**) opens its output images in a window here - a file list next to
+a scaled preview - never the OS file browser. This never polls ComfyUI, it
+just globs whatever's currently on disk under your configured ComfyUI
+installation's `output` folder for that run's logged filename prefixes, so
+a still-in-progress run is fine to open - it just shows fewer images than
+it'll end up with. Requires the ComfyUI installation folder to be set in
+Settings (same setting the Workflow selector uses).
+
+Each `run_test.py`/`lora_test.py` run writes its images under their own
+`tests/<name>/<run_id>/...` directory (`run_id` a short random id, fresh
+per run) rather than everyone sharing `tests/<name>/...`, so two runs with
+the same name never comingle their images - this is what makes a precise
+per-run image snapshot possible at all.
 
 ## Launcher exe
 

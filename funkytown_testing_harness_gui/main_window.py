@@ -50,13 +50,16 @@ from funkytown_testing_harness_gui.app_settings import load_settings, save_setti
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
 from funkytown_testing_harness_gui.lora_weights_dialog import LoraWeightsDialog
 from funkytown_testing_harness_gui.model_config_dialog import ModelConfigDialog
+from funkytown_testing_harness_gui.result_images_dialog import ResultImagesDialog
 from funkytown_testing_harness_gui.runner_thread import TestRunnerThread
 from funkytown_testing_harness_gui.settings_dialog import SettingsDialog
 
 # Wherever funkytown_testing_harness actually resolved from (default sibling
-# or a custom path from Settings) - that's where its configs/ folder lives.
+# or a custom path from Settings) - that's where its configs/ (and runs/)
+# folder lives.
 HARNESS_ROOT = Path(funkytown_testing_harness.__file__).resolve().parent.parent
 CONFIGS_DIR = HARNESS_ROOT / "configs"
+RUNS_DIR = HARNESS_ROOT / "runs"
 
 # This GUI project's own root - for its own local run state, independent of
 # the harness project.
@@ -94,6 +97,7 @@ class MainWindow(QMainWindow):
         self.outer_tabs = QTabWidget()
         self.outer_tabs.addTab(self._build_testing_tab(), "Testing")
         self.outer_tabs.addTab(self._build_variations_tab(), "Variations")
+        self.outer_tabs.addTab(self._build_results_tab(), "Results")
         root.addWidget(self.outer_tabs, 1)
 
         self._refresh_workflow_list()
@@ -879,6 +883,7 @@ class MainWindow(QMainWindow):
         self.run_button.setEnabled(True)
         self.run_button.setText("Run Test")
         self._log("Done.")
+        self._refresh_results_list()
 
     def _on_run_finished_error(self, message):
         self.run_button.setEnabled(True)
@@ -1479,10 +1484,14 @@ class MainWindow(QMainWindow):
             )
             return
 
+        RUNS_DIR.mkdir(exist_ok=True)
+        log_path = RUNS_DIR / f"variations_{datetime.datetime.now():%Y%m%d_%H%M%S}.csv"
+
         config = {
             "csv_paths": [str(p) for p in self._last_variations_output_paths],
             "workflow": str(workflow_path),
             "server": self.settings["server"],
+            "log": str(log_path),
         }
 
         if not self._confirm_json("Confirm queue job", config, "About to queue these file(s) to ComfyUI:", "Queue"):
@@ -1504,9 +1513,107 @@ class MainWindow(QMainWindow):
         self.variations_queue_button.setEnabled(True)
         self.variations_queue_button.setText("Queue Generated Variations")
         self.variations_log_view.appendPlainText("Done.")
+        self._refresh_results_list()
 
     def _on_queue_variations_finished_error(self, message):
         self.variations_queue_button.setEnabled(True)
         self.variations_queue_button.setText("Queue Generated Variations")
         self.variations_log_view.appendPlainText(f"ERROR: {message}")
         QMessageBox.critical(self, "Queue failed", message)
+
+    # ---- Results tab: browse previous runs' output images ---------------------
+
+    def _build_results_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        layout.addWidget(QLabel(
+            "Every logged run - Model/LoRA test runs, and Variations runs "
+            "that were queued to ComfyUI - newest first. Double-click one to "
+            "browse its output images in a window here (not the OS file "
+            "browser). A still-in-progress run is fine to open - this never "
+            "polls ComfyUI, it just shows whatever's on disk right now."
+        ))
+
+        self.results_list = QListWidget()
+        self.results_list.itemDoubleClicked.connect(self._on_open_result_run)
+        layout.addWidget(self.results_list, 1)
+
+        buttons_row = QHBoxLayout()
+        refresh_button = QPushButton("Refresh")
+        refresh_button.clicked.connect(self._refresh_results_list)
+        buttons_row.addWidget(refresh_button)
+        open_button = QPushButton("Open selected")
+        open_button.clicked.connect(lambda: self._on_open_result_run(self.results_list.currentItem()))
+        buttons_row.addWidget(open_button)
+        buttons_row.addStretch(1)
+        layout.addLayout(buttons_row)
+
+        self._refresh_results_list()
+
+        return page
+
+    def _refresh_results_list(self):
+        self.results_list.clear()
+        if not RUNS_DIR.is_dir():
+            return
+        log_paths = sorted(RUNS_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        for log_path in log_paths:
+            kind, prefixes = self._read_run_log_summary(log_path)
+            item = QListWidgetItem(f"{log_path.stem}   ({kind}, {len(prefixes)} queued)")
+            item.setData(Qt.UserRole, str(log_path))
+            self.results_list.addItem(item)
+
+    def _read_run_log_summary(self, log_path):
+        """(kind, prefixes) for a runs/*.csv log - kind is "Variations Queue"
+        for a rerun_prompts_comfyui.py-style log (detected by its "CSV File"
+        column) or "Test Run" for a run_test.py/lora_test.py-style one;
+        prefixes is every non-empty "Filename Prefix" value (skipped/error
+        rows log an empty one, so they're naturally excluded)."""
+        try:
+            with open(log_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                fieldnames = reader.fieldnames or []
+                rows = list(reader)
+        except OSError:
+            return "Unknown", []
+        kind = "Variations Queue" if "CSV File" in fieldnames else "Test Run"
+        prefixes = [r["Filename Prefix"] for r in rows if r.get("Filename Prefix")]
+        return kind, prefixes
+
+    def _resolve_run_images(self, log_path):
+        """Snapshot of whatever image files currently exist on disk for a
+        logged run - reads each row's Filename Prefix and globs
+        "<prefix>_*" under ComfyUI's output folder (ComfyUI appends its own
+        numeric counter and extension to filename_prefix). No polling
+        ComfyUI - just whatever's there right now, so a still-in-progress
+        run simply shows fewer images than it'll end up with."""
+        comfyui_install_dir = self.settings.get("comfyui_install_dir")
+        if not comfyui_install_dir:
+            return []
+        output_dir = Path(comfyui_install_dir) / "output"
+        _kind, prefixes = self._read_run_log_summary(log_path)
+
+        seen = set()
+        images = []
+        for prefix in prefixes:
+            prefix_path = output_dir / prefix
+            if not prefix_path.parent.is_dir():
+                continue
+            for found in prefix_path.parent.glob(prefix_path.name + "_*"):
+                if found.is_file() and found not in seen:
+                    seen.add(found)
+                    images.append(found)
+        images.sort()
+        return images
+
+    def _on_open_result_run(self, item):
+        if item is None:
+            return
+        if not self.settings.get("comfyui_install_dir"):
+            QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
+            return
+        log_path = Path(item.data(Qt.UserRole))
+        images = self._resolve_run_images(log_path)
+        dialog = ResultImagesDialog(log_path.stem, images, self)
+        dialog.exec()
