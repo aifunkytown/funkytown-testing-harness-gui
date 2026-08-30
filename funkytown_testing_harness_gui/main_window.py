@@ -42,6 +42,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from funkytown_testing_harness import comparison_grid
 from funkytown_testing_harness.lora_test import run as run_lora_test
 from funkytown_testing_harness.run_test import run as run_model_test
 from comfy_prompt_tools import generate_prompt_variations, rerun_prompts_comfyui
@@ -1619,6 +1620,15 @@ class MainWindow(QMainWindow):
         delete_button.setToolTip("Deletes this run's log and its output images. Cannot be undone.")
         delete_button.clicked.connect(self._on_delete_selected_result)
         buttons_row.addWidget(delete_button)
+        self.create_grid_button = QPushButton("Create Grid")
+        self.create_grid_button.setEnabled(False)
+        self.create_grid_button.setToolTip(
+            "Builds a labeled side-by-side comparison image from this run's "
+            "output images (one column per model/LoRA combo, wrapping onto "
+            "additional rows past 4)."
+        )
+        self.create_grid_button.clicked.connect(self._on_create_grid_clicked)
+        buttons_row.addWidget(self.create_grid_button)
         left_layout.addLayout(buttons_row)
         splitter.addWidget(left)
 
@@ -1699,6 +1709,7 @@ class MainWindow(QMainWindow):
 
     def _on_results_selection_changed(self, current, _previous):
         self.results_images_view.clear()
+        self.create_grid_button.setEnabled(current is not None)
         if current is None:
             return
         if not self.settings.get("comfyui_install_dir"):
@@ -1716,8 +1727,10 @@ class MainWindow(QMainWindow):
             self.results_images_view.addItem(item)
 
     def _on_open_full_image(self, item):
-        path = item.data(Qt.UserRole)
-        pixmap = QPixmap(path)
+        self._show_full_image_dialog(item.data(Qt.UserRole))
+
+    def _show_full_image_dialog(self, path):
+        pixmap = QPixmap(str(path))
         if pixmap.isNull():
             return
         dialog = QDialog(self)
@@ -1732,6 +1745,31 @@ class MainWindow(QMainWindow):
         buttons.rejected.connect(dialog.close)
         layout.addWidget(buttons)
         dialog.exec()
+
+    def _on_create_grid_clicked(self):
+        item = self.results_list.currentItem()
+        if item is None:
+            return
+        comfyui_install_dir = self.settings.get("comfyui_install_dir")
+        if not comfyui_install_dir:
+            QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
+            return
+
+        log_path = Path(item.data(Qt.UserRole))
+        output_dir = Path(comfyui_install_dir) / "output"
+        grid_path = RUNS_DIR / "grids" / f"{log_path.stem}_grid.png"
+
+        try:
+            comparison_grid.build_comparison_grid(log_path, output_dir, grid_path)
+        except ValueError as e:
+            QMessageBox.warning(self, "Can't create grid", str(e))
+            return
+        except OSError as e:
+            QMessageBox.critical(self, "Grid creation failed", str(e))
+            return
+
+        self._log(f"Comparison grid saved to {grid_path}")
+        self._show_full_image_dialog(grid_path)
 
     def _on_delete_selected_result(self):
         item = self.results_list.currentItem()

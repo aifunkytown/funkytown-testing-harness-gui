@@ -49,9 +49,12 @@ even after submodules were added) - or override the location of either
 dependency in Settings if you keep them somewhere else entirely.
 
 ```bash
-pip install PySide6
+pip install PySide6 Pillow
 python -m funkytown_testing_harness_gui.main
 ```
+
+(Pillow is only needed for the Results tab's "Create Grid" button, which
+calls straight into `funkytown-testing-harness`'s own `comparison_grid.py`.)
 
 Or just double-click **`Launch funkytown-testing-harness-gui.exe`** at the
 project root - see "Launcher exe" below.
@@ -236,18 +239,23 @@ queued to ComfyUI (a "Queue Generated Variations" run writes its own log
 there too, alongside the Testing tab's, instead of the single shared
 `rerun_log.csv` `rerun_prompts_comfyui.py` normally overwrites on every
 invocation - so each queue run gets its own permanent entry here). Each
-entry shows how many prompts it queued. Selecting a run fills the right
-side with a tightly-packed grid of thumbnails for its output images - never
-the OS file browser - double-click a thumbnail to view it full size.
-**Refresh** re-scans the folder (also done automatically after Run Test or
-Queue Generated Variations finishes); **Delete selected** removes a run's
-log and its output images after confirming (cannot be undone). This never
-polls ComfyUI, it just globs whatever's currently on disk under your
-configured ComfyUI installation's `output` folder for that run's logged
-filename prefixes, so a still-in-progress run is fine to select - it just
-shows fewer images than it'll end up with. Requires the ComfyUI
-installation folder to be set in Settings (same setting the Workflow
-selector uses).
+entry shows how many prompts it queued. Nothing is selected by default -
+the right side stays blank until you click a run, which then fills it with
+a tightly-packed grid of thumbnails for its output images - never the OS
+file browser - double-click a thumbnail to view it full size. **Refresh**
+re-scans the folder (also done automatically after Run Test or Queue
+Generated Variations finishes); **Delete selected** removes a run's log and
+its output images after confirming (cannot be undone); **Create Grid**
+(also needs a run selected) builds a single labeled side-by-side comparison
+image from that run's output - one column per model/LoRA combo, wrapping
+onto additional rows past 4 columns - and opens it the same way a thumbnail
+does, saved under `funkytown-testing-harness`'s `runs/grids/` folder. None
+of this polls ComfyUI, it just globs whatever's currently on disk under
+your configured ComfyUI installation's `output` folder for that run's
+logged filename prefixes, so a still-in-progress run is fine to select or
+grid - it just shows/uses fewer images than it'll end up with. Requires the
+ComfyUI installation folder to be set in Settings (same setting the
+Workflow selector uses).
 
 Each `run_test.py`/`lora_test.py` run writes its images under their own
 `tests/<name>/<run_id>/...` directory (`run_id` a short random id, fresh
