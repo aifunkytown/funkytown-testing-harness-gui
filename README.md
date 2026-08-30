@@ -73,17 +73,21 @@ prompt variations for one CSV row via Ollama).
 
 - **Workflow selector** (shared, top of the tab) - dropdown of workflow
   files found in your ComfyUI installation's `user/default/workflows` folder
-  (configured in Settings), plus a prompt source toggle: **Single prompt
-  override** (a free-text box, blank to use the workflow's own prompt - the
-  original behavior) or **Prompts from CSV**, which sweeps every prompt in
-  a CSV file across whatever's configured on the Model/LoRA tabs - e.g. 2
-  models x 4 LoRA combinations x 10 prompt rows queues 80 runs. Selecting a
-  CSV enables **Min row**/**Max row** counters (set to its full row range
-  by default) and **Show Prompts** (previews each selected row's resolved
-  text - Cleaned Prompt if present, otherwise Positive Prompt - the same
-  CSV/row-picker pattern as the Variations tab's, and requires
-  `funkytown-testing-harness`'s `"positive_prompts"` config support). The
-  **Use Default LoRAs** checkbox only applies on the Model tab (it's
+  (configured in Settings), plus a **Prompt** box - a scrollable, freely
+  editable multi-line text box. Leave it blank to use the workflow's own
+  prompt; type one line to override it; type two or more lines to sweep
+  every model/LoRA combo configured on the Model/LoRA tabs against each
+  line - e.g. 2 models x 4 LoRA combinations x 10 prompt lines queues 80
+  runs (requires `funkytown-testing-harness`'s `"positive_prompts"` config
+  support). **Load from CSV** plus **Min row**/**Max row** counters populate
+  the box with a CSV's resolved prompt text (Cleaned Prompt if present,
+  otherwise Positive Prompt) - one line per row, defaulting to the CSV's
+  full row range; changing the CSV file or the row range always overwrites
+  the box with a fresh pull. Once loaded, lines can be freely edited or
+  deleted (never writes back to the source CSV) - a red **edited** label
+  appears next to Max row whenever the box's content no longer matches a
+  fresh pull of the current CSV/row range. The **Use Default LoRAs**
+  checkbox only applies on the Model tab (it's
   disabled on the LoRA tab, since a LoRA run needs those slots to stay present) -
   unchecked by default, meaning this run's queued workflow gets its Power
   Lora Loader node cleared; check it to leave the workflow's own LoRA setup
@@ -146,10 +150,13 @@ prompt variations for one CSV row via Ollama).
   wiping it out. An older lora_test.py config's singular `"model"` key (no
   `"models"` list) is folded into the Model tab's list the same way, since
   there's no separate LoRA-tab model field to hold it any more. Also saves
-  and restores which prompt-source mode was active - `"positive_prompt"`
-  for Single prompt override, or `"positive_prompts_csv"` plus
-  `"positive_prompts_min_row"`/`"positive_prompts_max_row"` for Prompts
-  from CSV.
+  the Prompt box's exact current content (`"positive_prompt"` for 0-1
+  lines, `"positive_prompts"` for 2+) - not a live CSV reference, so an
+  edited/trimmed line list round-trips exactly as saved. If a CSV was used
+  to load it, `"positive_prompts_csv"`/`"positive_prompts_min_row"`/
+  `"positive_prompts_max_row"` are also saved purely as a convenience for
+  reloading that picker later; importing recomputes the **edited** label
+  against a fresh pull of that CSV/range rather than trusting a stale flag.
 - **Settings menu** - currently just **Hide Explicit**, checked by default
   and persisted across launches - hides any aspect
   `prompt_aspect_vocab.json` marks explicit (its `_explicit_aspects` list)
@@ -170,13 +177,22 @@ same messages the CLI would print.
 Front end for `comfy_prompt_tools.generate_prompt_variations` - pick a CSV
 file, which enables the **Min row**/**Max row** counters (disabled until
 then) and sets them to the CSV's full row range (1 to its last data row) by
-default; narrow them to target a single row or a smaller range. **Show
-Prompts** (disabled until a CSV with at least one row is loaded) previews
-the exact source text each row in that range will use - Cleaned Prompt if
-the CSV has that column and it's non-empty for the row, otherwise Positive
-Prompt, same preference `generate_prompt_variations.py` itself uses - so you
-can sanity-check the row selection before spending an Ollama call on it.
-Then either check one or more aspects from a list populated from
+default; narrow them to target a single row or a smaller range. Changing
+the CSV file or the row range populates the **Prompts** list below with
+each selected row's resolved source text (Cleaned Prompt if the CSV has
+that column and it's non-empty for the row, otherwise Positive Prompt,
+same preference `generate_prompt_variations.py` itself uses) - click a line
+to edit its text (overriding what gets varied for that row, while every
+other column - File Name, Negative Prompt, etc. - still comes from the CSV
+row as normal), or select a line and **Remove selected** to skip that row
+entirely; neither ever touches the source CSV file. Unlike the Testing
+tab's Prompt box, no new unattached lines can be added here - each line is
+always tied to a specific CSV row, since a Variations run needs that row's
+other metadata to write its output. A red **edited** label appears next to
+Max row whenever the list no longer matches a fresh pull of the current
+CSV/row range; changing the CSV file or the row range always repopulates
+the list fresh, discarding any edits/removals made under the previous
+selection. Then either check one or more aspects from a list populated from
 `prompt_aspect_vocab.json` (plus an optional free-text field for aspects not
 in that file) - aspects the vocab file marks explicit are hidden here by
 default, see Settings > Hide Explicit above - or switch to "Random aspects"
