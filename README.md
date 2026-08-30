@@ -90,11 +90,12 @@ prompt variations for one CSV row via Ollama).
   as-is instead. Either way this only affects *this run's* queued workflow,
   not anything downstream: **Edit LoRA Rules...** next to it opens an
   editable table of `comfy-prompt-tools/rerun_prompts_comfyui.py`'s current
-  keyword -> LoRA routing rules - add, edit, or remove rows and Save writes
-  them to a gitignored `lora_rules.local.json` next to `lora_rules.json`
-  (never committed), taking effect immediately. These rules independently
-  turn a matching LoRA back on based on prompt text whenever a prompt is
-  later rerun through that script, regardless of Use Default LoRAs above.
+  keyword -> LoRA routing rules - click a cell to edit it inline (Enter or
+  clicking away saves it), Add/Remove rows, and Save writes them to a
+  gitignored `lora_rules.local.json` next to `lora_rules.json` (never
+  committed), taking effect immediately. These rules independently turn a
+  matching LoRA back on based on prompt text whenever a prompt is later
+  rerun through that script, regardless of Use Default LoRAs above.
 - **Model tab** - pick a model from a live-queried dropdown (from ComfyUI's
   `/object_info`) and "Add to list" builds up the model list - this is the
   *only* place model selection happens, for both a Models-only comparison
@@ -107,7 +108,9 @@ prompt variations for one CSV row via Ollama).
 - **LoRA tab** - a "Combine LoRAs" checkbox (run every LoRA together across
   the cartesian product of their weights, instead of one at a time), then
   pick a LoRA from a live-queried dropdown (from ComfyUI's `LoraLoader`
-  node) and "Add to list" to give it a list of weights to sweep. A LoRA
+  node) and "Add to list" to give it a list of weights to sweep - the weight
+  entry box starts blank (no default value) and its arrows step by whole
+  numbers, so it's always clear you have to actually enter one. A LoRA
   must already exist as a slot in the workflow's Power Lora Loader
   (rgthree) node - a slot can be toggled here but not created. There's no
   model picker here any more - a LoRA run always uses whatever's on the
@@ -125,13 +128,16 @@ prompt variations for one CSV row via Ollama).
   proceed, Cancel to back out and adjust something first. **Save Test...**
   sits next to Run Test and writes the same combined config to a file
   instead of running it (same as `File > Save Test...` below).
-- **Settings window** - ComfyUI server URL, ComfyUI installation folder (for
-  the workflow dropdown), and optional overrides for where
-  `funkytown-testing-harness` and `comfy-prompt-tools` live if they aren't
-  sibling directories.
+- **Settings window** (opened via the **Settings...** button, top right) -
+  ComfyUI server URL, ComfyUI installation folder (for the workflow
+  dropdown), and optional overrides for where `funkytown-testing-harness`
+  and `comfy-prompt-tools` live if they aren't sibling directories.
 - **File menu** - `File > Save Test...` writes the *combined* current state of
-  both the Model tab and the LoRA tab together to one JSON file (defaults
-  to `funkytown-testing-harness`'s `configs/` folder). If both tabs are
+  both the Model tab and the LoRA tab together to one JSON file. Defaults
+  to whichever file you last saved to or imported from this session; with
+  neither, it suggests a name built from the currently selected models plus
+  today's date (e.g. `modelA_modelB_2026-08-29.json`) in
+  `funkytown-testing-harness`'s `configs/` folder. If both tabs are
   empty it shows an error and writes nothing. `File > Import Test...` reads a
   JSON file back in and populates both tabs from it - each side only
   touches its own tab's data, and only if the file actually has that
@@ -144,12 +150,20 @@ prompt variations for one CSV row via Ollama).
   for Single prompt override, or `"positive_prompts_csv"` plus
   `"positive_prompts_min_row"`/`"positive_prompts_max_row"` for Prompts
   from CSV.
+- **Settings menu** - currently just **Hide Explicit**, checked by default
+  and persisted across launches - hides any aspect
+  `prompt_aspect_vocab.json` marks explicit (its `_explicit_aspects` list)
+  from the Variations tab's aspect checklist. Uncheck it to reveal them
+  again.
 
 After confirming, the assembled config is written to this project's own
 `gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending
 on which `run()` function is being used) and run on a background thread so
-the window doesn't freeze. Progress streams into the tab's own log panel at
-the bottom, the same messages the CLI would print.
+the window doesn't freeze. Progress streams into the tab's own collapsible
+**Log** section at the bottom (collapsed by default - click the arrow to
+expand; it overlays the window's existing content rather than resizing the
+window, so it can extend past the window's edges if there isn't room), the
+same messages the CLI would print.
 
 ### Variations tab
 
@@ -164,7 +178,9 @@ Prompt, same preference `generate_prompt_variations.py` itself uses - so you
 can sanity-check the row selection before spending an Ollama call on it.
 Then either check one or more aspects from a list populated from
 `prompt_aspect_vocab.json` (plus an optional free-text field for aspects not
-in that file), or switch to "Random aspects" and pick how many to have
+in that file) - aspects the vocab file marks explicit are hidden here by
+default, see Settings > Hide Explicit above - or switch to "Random aspects"
+and pick how many to have
 chosen randomly from the vocab file per row. Set a variation count and
 (optionally) a different Ollama model, then **Generate Variations** - same
 confirm-dialog-then-background-thread flow as the Testing tab's Run Test,
@@ -173,9 +189,9 @@ of possible values (for any that have a controlled vocabulary) so you can
 see what the model can actually pick from before committing - that list is
 preview-only and isn't written to the config that actually gets run. Writes
 to this project's own `gui_last_variations_run.json` (gitignored) and
-streams progress into the tab's own log panel. Output lands in a
-`Variations` folder next to the input CSV, same as running the script from
-the command line.
+streams progress into the tab's own collapsible Log section. Output lands
+in a `Variations` folder next to the input CSV, same as running the script
+from the command line.
 
 Once a Generate Variations run finishes successfully, **Queue Generated
 Variations** (disabled until then) submits exactly the output file(s) that
@@ -183,7 +199,7 @@ run just wrote to ComfyUI via `comfy_prompt_tools.rerun_prompts_comfyui`,
 using the Testing tab's Source workflow (resolved to a local file under
 your ComfyUI installation's `user/default/workflows` folder) and Settings'
 ComfyUI server - same confirm-dialog-then-background-thread flow, sharing
-the tab's log panel, writing to a gitignored
+the tab's Log section, writing to a gitignored
 `gui_last_queue_variations_run.json`. It always refers to the most recently
 *successful* Generate Variations run - starting a new one before queuing
 the previous one just replaces what Queue would submit next.
