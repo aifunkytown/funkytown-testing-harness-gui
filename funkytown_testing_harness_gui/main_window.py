@@ -11,8 +11,8 @@ import json
 from pathlib import Path
 
 import funkytown_testing_harness
-from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QSize, Qt, QTimer
+from PySide6.QtGui import QFont, QIcon, QPixmap
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSpinBox,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QTabWidget,
@@ -50,9 +51,10 @@ from funkytown_testing_harness_gui.app_settings import load_settings, save_setti
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
 from funkytown_testing_harness_gui.lora_weights_dialog import LoraWeightsDialog
 from funkytown_testing_harness_gui.model_config_dialog import ModelConfigDialog
-from funkytown_testing_harness_gui.result_images_dialog import ResultImagesDialog
+from funkytown_testing_harness_gui.prompts_dialog import PromptsDialog
 from funkytown_testing_harness_gui.runner_thread import TestRunnerThread
 from funkytown_testing_harness_gui.settings_dialog import SettingsDialog
+from funkytown_testing_harness_gui.variations_prompts_dialog import VariationsPromptsDialog
 
 # Wherever funkytown_testing_harness actually resolved from (default sibling
 # or a custom path from Settings) - that's where its configs/ (and runs/)
@@ -82,6 +84,7 @@ class MainWindow(QMainWindow):
         self.settings = load_settings()
         self._models = {}  # model_name -> list[dict] (configs)
         self._loras = {}  # lora_name -> list[float] (weights)
+        self._prompts = []  # Testing tab's prompt list - see Prompts... popup
         self._runner_thread = None
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
         self._defaults_thread = None
@@ -167,15 +170,13 @@ class MainWindow(QMainWindow):
         """Adds a collapsible "Log" section: a small clickable arrow that
         toggles log_view's visibility, collapsed by default.
 
-        log_view floats as an overlay on top of `page` instead of being
-        managed by `layout` - a widget newly added to a QVBoxLayout's
-        space forces Qt to grow the top-level window to satisfy its
-        minimum size (even overriding an explicit resize() back, since the
-        layout just re-clamps it), which is exactly the window-move this
-        was asked not to do. As a plain floating child, expanding it can
-        only overlay whatever's below the toggle button within the
-        window's current bounds - overflowing past them if there isn't
-        room is fine; the window itself never resizes to compensate."""
+        log_view is a normal member of `layout` (previously a floating
+        overlay on `page` specifically to avoid resizing the window - but
+        that meant expanding it could get clipped by the window's own
+        bottom edge with no way to see the rest, which is worse than the
+        window growing to fit it). Being a real layout member means
+        expanding it grows the window to make room, same as any other
+        newly-shown widget; collapsing it shrinks the window back down."""
         toggle_button = QToolButton()
         toggle_button.setArrowType(Qt.RightArrow)
         toggle_button.setText("Log")
@@ -185,15 +186,12 @@ class MainWindow(QMainWindow):
         toggle_button.setAutoRaise(True)
         layout.addWidget(toggle_button)
 
-        log_view.setParent(page)
+        log_view.setMinimumHeight(220)
         log_view.setVisible(False)
+        layout.addWidget(log_view, 1)
 
         def on_toggled(checked):
             toggle_button.setArrowType(Qt.DownArrow if checked else Qt.RightArrow)
-            if checked:
-                top_left = toggle_button.mapTo(page, toggle_button.rect().bottomLeft())
-                log_view.setGeometry(0, top_left.y(), page.width(), 220)
-                log_view.raise_()
             log_view.setVisible(checked)
 
         toggle_button.toggled.connect(on_toggled)
@@ -304,17 +302,21 @@ class MainWindow(QMainWindow):
         ))
 
         layout.addWidget(QLabel("<b>Prompt</b>"))
-        self.prompt_edit = QPlainTextEdit()
-        self.prompt_edit.setMaximumHeight(90)
-        self.prompt_edit.setToolTip(
-            "Leave blank to use the workflow's own prompt, or type one to "
-            "override it. Two or more lines = a sweep - every model/LoRA "
-            "combo in this run is tested against each line - load lines "
-            "from a CSV below, or type/edit/delete them directly here; "
-            "deleting a line never touches the source CSV file."
+        prompts_button_row = QHBoxLayout()
+        edit_prompts_button = QPushButton("Prompts...")
+        edit_prompts_button.setToolTip(
+            "Leave empty to use the workflow's own prompt, add one to "
+            "override it, or two or more for a sweep - every model/LoRA "
+            "combo in this run is tested against each one. Load prompts "
+            "from a CSV below, or add/remove them directly in the popup; "
+            "removing one never touches the source CSV file."
         )
-        self.prompt_edit.textChanged.connect(self._on_prompt_box_changed)
-        layout.addWidget(self.prompt_edit)
+        edit_prompts_button.clicked.connect(self._on_edit_prompts_clicked)
+        prompts_button_row.addWidget(edit_prompts_button)
+        self.prompts_summary_label = QLabel()
+        prompts_button_row.addWidget(self.prompts_summary_label, 1)
+        layout.addLayout(prompts_button_row)
+        self._update_prompts_summary_label()
 
         prompts_csv_row = QHBoxLayout()
         prompts_csv_row.addWidget(QLabel("Load from CSV:"))
@@ -340,25 +342,25 @@ class MainWindow(QMainWindow):
         self.prompts_edited_label.setStyleSheet("color: red; font-weight: bold;")
         self.prompts_edited_label.setVisible(False)
         self.prompts_edited_label.setToolTip(
-            "The Prompt box above no longer matches a fresh pull of this CSV/row range."
+            "The prompt list above no longer matches a fresh pull of this CSV/row range."
         )
         prompts_row_row.addWidget(self.prompts_edited_label)
         prompts_row_row.addStretch(1)
         layout.addLayout(prompts_row_row)
 
-        self._last_loaded_csv_prompts_text = None
+        self._last_loaded_csv_prompts = None
         self.prompts_csv_edit.textChanged.connect(self._on_prompts_csv_changed)
         self.prompts_row_min_spin.valueChanged.connect(self._on_prompts_range_changed)
         self.prompts_row_max_spin.valueChanged.connect(self._on_prompts_range_changed)
 
         return group
 
-    def _load_prompts_from_csv_into_box(self):
-        """Refresh the Prompt box to match a fresh pull of the current CSV +
-        Min/Max row selection. Always overwrites the box - changing which
+    def _load_prompts_from_csv(self):
+        """Refresh self._prompts to match a fresh pull of the current CSV +
+        Min/Max row selection. Always overwrites the list - changing which
         rows you're pointed at is an explicit "give me these instead"
-        action, unlike typing directly in the box (which trips the "edited"
-        indicator instead of ever being silently overwritten by this)."""
+        action, unlike editing via the Prompts... popup (which trips the
+        "edited" indicator instead of ever being silently overwritten)."""
         csv_path = self.prompts_csv_edit.text().strip()
         if not csv_path or not Path(csv_path).is_file() or not self.prompts_row_min_spin.isEnabled():
             return
@@ -370,23 +372,22 @@ class MainWindow(QMainWindow):
         except Exception:
             return
 
-        text = "\n".join(row_text for _row_num, row_text, _label in resolved if row_text)
-        self._suppress_prompt_edited_check = True
-        self.prompt_edit.setPlainText(text)
-        self._suppress_prompt_edited_check = False
-        self._last_loaded_csv_prompts_text = text
+        prompts = [row_text for _row_num, row_text, _label in resolved if row_text]
+        self._prompts = prompts
+        self._last_loaded_csv_prompts = list(prompts)
+        self._update_prompts_summary_label()
         self.prompts_edited_label.setVisible(False)
 
     def _refresh_prompts_edited_state(self):
-        """Recompute whether the Prompt box's current content matches a
-        fresh pull of the currently-configured CSV + row range, without
-        touching the box itself - used after File > Import Test... so the
-        "edited" indicator reflects reality even though the box was
-        populated directly from the imported prompt list, not via the
-        normal auto-load path."""
+        """Recompute whether self._prompts still matches a fresh pull of
+        the currently-configured CSV + row range, without touching
+        self._prompts itself - used after File > Import Test... so the
+        "edited" indicator reflects reality even though the list was
+        populated directly from the imported prompts, not via the normal
+        auto-load path."""
         csv_path = self.prompts_csv_edit.text().strip()
         if not csv_path or not Path(csv_path).is_file() or not self.prompts_row_min_spin.isEnabled():
-            self._last_loaded_csv_prompts_text = None
+            self._last_loaded_csv_prompts = None
             self.prompts_edited_label.setVisible(False)
             return
         try:
@@ -395,24 +396,38 @@ class MainWindow(QMainWindow):
             )
             resolved = self._extract_csv_prompt_rows(csv_path, row_numbers)
         except Exception:
-            self._last_loaded_csv_prompts_text = None
+            self._last_loaded_csv_prompts = None
             self.prompts_edited_label.setVisible(False)
             return
-        fresh_text = "\n".join(row_text for _row_num, row_text, _label in resolved if row_text)
-        self._last_loaded_csv_prompts_text = fresh_text
-        self.prompts_edited_label.setVisible(self.prompt_edit.toPlainText() != fresh_text)
+        fresh_prompts = [row_text for _row_num, row_text, _label in resolved if row_text]
+        self._last_loaded_csv_prompts = fresh_prompts
+        self.prompts_edited_label.setVisible(self._prompts != fresh_prompts)
 
-    def _on_prompt_box_changed(self):
-        if getattr(self, "_suppress_prompt_edited_check", False):
-            return
-        if self._last_loaded_csv_prompts_text is None:
-            return
-        current = self.prompt_edit.toPlainText()
-        self.prompts_edited_label.setVisible(current != self._last_loaded_csv_prompts_text)
+    def _update_prompts_summary_label(self):
+        n = len(self._prompts)
+        if n == 0:
+            self.prompts_summary_label.setText("(none - uses the workflow's own prompt)")
+        elif n == 1:
+            preview = self._prompts[0]
+            if len(preview) > 60:
+                preview = preview[:57] + "..."
+            self.prompts_summary_label.setText(f'1 prompt - "{preview}"')
+        else:
+            self.prompts_summary_label.setText(f"{n} prompts (sweep)")
+
+    def _on_edit_prompts_clicked(self):
+        dialog = PromptsDialog(self._prompts, self)
+        if dialog.exec():
+            self._prompts = dialog.prompts
+            self._update_prompts_summary_label()
+            self._refresh_prompts_edited_state()
 
     def _prompt_lines(self):
-        """Non-empty lines currently in the Prompt box."""
-        return [line.strip() for line in self.prompt_edit.toPlainText().splitlines() if line.strip()]
+        """Non-empty prompts currently held for the Testing tab's run."""
+        return [text for text in self._prompts if text.strip()]
+
+    def _single_prompt_text(self):
+        return self._prompts[0] if self._prompts else ""
 
     def _edit_lora_rules(self):
         dialog = QDialog(self)
@@ -680,7 +695,7 @@ class MainWindow(QMainWindow):
         if prompts:
             config["positive_prompts"] = prompts
         else:
-            config["positive_prompt"] = self.prompt_edit.toPlainText().strip()
+            config["positive_prompt"] = self._single_prompt_text()
         return config
 
     # ---- lora tab -----------------------------------------------------------
@@ -796,7 +811,7 @@ class MainWindow(QMainWindow):
         if prompts:
             config["positive_prompts"] = prompts
         else:
-            config["positive_prompt"] = self.prompt_edit.toPlainText().strip()
+            config["positive_prompt"] = self._single_prompt_text()
         return config
 
     # ---- unified run (Models tab and/or LoRA tab, whichever are populated) ----
@@ -907,10 +922,10 @@ class MainWindow(QMainWindow):
         if len(prompt_lines) >= 2:
             config["positive_prompts"] = prompt_lines
         else:
-            config["positive_prompt"] = self.prompt_edit.toPlainText().strip()
+            config["positive_prompt"] = self._single_prompt_text()
         # Purely informational, not authoritative - lets File > Import Test...
         # re-populate the CSV picker for further editing later. The
-        # "positive_prompt(s)" above always reflects the box's actual
+        # "positive_prompt(s)" above always reflects self._prompts' actual
         # current content, edited or not.
         if self.prompts_csv_edit.text().strip():
             config["positive_prompts_csv"] = self.prompts_csv_edit.text().strip()
@@ -979,7 +994,7 @@ class MainWindow(QMainWindow):
         if "positive_prompts_csv" in config:
             # Restore the CSV/row-range picker fields silently (informational
             # only) - _suppress_prompt_autoload keeps this from clobbering
-            # the box content set from "positive_prompt(s)" just below.
+            # self._prompts, set from "positive_prompt(s)" just below.
             self._suppress_prompt_autoload = True
             self.prompts_csv_edit.setText(config["positive_prompts_csv"])
             if "positive_prompts_min_row" in config:
@@ -988,9 +1003,17 @@ class MainWindow(QMainWindow):
                 self.prompts_row_max_spin.setValue(config["positive_prompts_max_row"])
             self._suppress_prompt_autoload = False
         if "positive_prompts" in config:
-            self.prompt_edit.setPlainText("\n".join(config["positive_prompts"]))
+            self._prompts = list(config["positive_prompts"])
         elif "positive_prompt" in config:
-            self.prompt_edit.setPlainText(config["positive_prompt"])
+            self._prompts = [config["positive_prompt"]] if config["positive_prompt"] else []
+        elif "positive_prompts_csv" in config:
+            # Older save format (from before the Prompts... popup existed)
+            # stored only the CSV/range, never a resolved prompt list -
+            # fall back to resolving it fresh now (using the CSV/range just
+            # restored above) so importing an old file doesn't silently
+            # leave self._prompts empty.
+            self._load_prompts_from_csv()
+        self._update_prompts_summary_label()
         self._refresh_prompts_edited_state()
 
         # Each side only touches its own tab's data, and only if the
@@ -1047,6 +1070,17 @@ class MainWindow(QMainWindow):
         csv_row.addWidget(browse_button)
         layout.addLayout(csv_row)
 
+        single_prompt_row = QHBoxLayout()
+        single_prompt_row.addWidget(QLabel("Single prompt (no CSV needed):"))
+        self.variations_single_prompt_edit = QLineEdit()
+        self.variations_single_prompt_edit.setPlaceholderText("Type or paste a single prompt...")
+        self.variations_single_prompt_edit.setToolTip(
+            "Only used when no CSV file is chosen above - lets you generate "
+            "variations of one ad-hoc prompt without needing a CSV at all."
+        )
+        single_prompt_row.addWidget(self.variations_single_prompt_edit, 1)
+        layout.addLayout(single_prompt_row)
+
         row_row = QHBoxLayout()
         row_row.addWidget(QLabel("Min row:"))
         self.variations_row_min_spin = QSpinBox()
@@ -1068,28 +1102,26 @@ class MainWindow(QMainWindow):
         row_row.addStretch(1)
         layout.addLayout(row_row)
 
+        self._variations_current_prompts = {}  # row_num -> text, populated from CSV
         self._last_loaded_variations_prompts = None
         self.variations_csv_edit.textChanged.connect(self._on_variations_csv_changed)
         self.variations_row_min_spin.valueChanged.connect(self._on_variations_range_changed)
         self.variations_row_max_spin.valueChanged.connect(self._on_variations_range_changed)
 
-        layout.addWidget(QLabel(
-            "Prompts (source text per row - Cleaned Prompt if present, otherwise "
-            "Positive Prompt; click a line to edit its text, or remove a line to "
-            "skip that row - neither ever touches the source CSV file):"
-        ))
-        self.variations_prompts_list = QListWidget()
-        self.variations_prompts_list.setMaximumHeight(120)
-        self.variations_prompts_list.itemClicked.connect(self.variations_prompts_list.editItem)
-        self.variations_prompts_list.itemChanged.connect(self._on_variations_prompts_item_changed)
-        layout.addWidget(self.variations_prompts_list)
-
-        remove_prompt_row = QHBoxLayout()
-        remove_prompt_row.addStretch(1)
-        remove_prompt_button = QPushButton("Remove selected")
-        remove_prompt_button.clicked.connect(self._remove_selected_variations_prompt)
-        remove_prompt_row.addWidget(remove_prompt_button)
-        layout.addLayout(remove_prompt_row)
+        prompts_button_row = QHBoxLayout()
+        self.variations_prompts_button = QPushButton("Prompts...")
+        self.variations_prompts_button.setToolTip(
+            "Browse the CSV rows' source text (Cleaned Prompt if present, "
+            "otherwise Positive Prompt) - edit a row's text to override it, "
+            "or remove one to skip that row. Neither ever touches the "
+            "source CSV file."
+        )
+        self.variations_prompts_button.clicked.connect(self._on_edit_variations_prompts_clicked)
+        prompts_button_row.addWidget(self.variations_prompts_button)
+        self.variations_prompts_summary_label = QLabel()
+        prompts_button_row.addWidget(self.variations_prompts_summary_label, 1)
+        layout.addLayout(prompts_button_row)
+        self._update_variations_prompts_summary_label()
 
         mode_row = QHBoxLayout()
         self.variations_named_radio = QRadioButton("Named aspect(s)")
@@ -1177,9 +1209,20 @@ class MainWindow(QMainWindow):
         self.variations_extra_aspect_edit.setEnabled(named_mode)
         self.variations_random_spin.setEnabled(not named_mode)
 
+    def _csv_browse_default_dir(self):
+        """Where a CSV file picker should open by default when its field is
+        currently empty - ComfyUI's own output folder, since that's where
+        prompt CSVs (from extract_image_prompts.py et al) typically live;
+        falls back to funkytown-testing-harness's configs/ if no ComfyUI
+        installation folder is set in Settings yet."""
+        comfyui_install_dir = self.settings.get("comfyui_install_dir")
+        if comfyui_install_dir:
+            return str(Path(comfyui_install_dir) / "output")
+        return str(CONFIGS_DIR)
+
     def _on_browse_variations_csv(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose prompt CSV", self.variations_csv_edit.text() or str(CONFIGS_DIR), "CSV files (*.csv)"
+            self, "Choose prompt CSV", self.variations_csv_edit.text() or self._csv_browse_default_dir(), "CSV files (*.csv)"
         )
         if path:
             self.variations_csv_edit.setText(path)
@@ -1248,82 +1291,79 @@ class MainWindow(QMainWindow):
         return results
 
     def _on_variations_csv_changed(self, _text=None):
+        csv_text = self.variations_csv_edit.text().strip()
         self._update_row_spinboxes_for_csv(
-            self.variations_csv_edit.text().strip(),
+            csv_text,
             self.variations_row_min_spin, self.variations_row_max_spin,
         )
-        self._load_variations_prompts_list()
+        # The single-prompt field is only meaningful when there's no CSV to
+        # supply rows instead - disable it (rather than clearing it) so a
+        # value typed earlier isn't lost if the CSV field gets cleared again.
+        self.variations_single_prompt_edit.setEnabled(not bool(csv_text))
+        self._load_variations_prompts()
 
     def _on_variations_range_changed(self, _value=None):
-        self._load_variations_prompts_list()
+        self._load_variations_prompts()
 
     def _variations_row_arg(self):
         return self._row_range_arg(self.variations_row_min_spin, self.variations_row_max_spin)
 
-    def _load_variations_prompts_list(self):
-        """Refresh the prompts list to match a fresh pull of the current CSV
-        + Min/Max row selection - always overwrites the list, same rationale
-        as the Testing tab's _load_prompts_from_csv_into_box. Rows with no
+    def _load_variations_prompts(self):
+        """Refresh self._variations_current_prompts to match a fresh pull of
+        the current CSV + Min/Max row selection - always overwrites it, same
+        rationale as the Testing tab's _load_prompts_from_csv. Rows with no
         resolvable prompt text are omitted (nothing meaningful to generate
         variations from)."""
         csv_path = self.variations_csv_edit.text().strip()
-        self.variations_prompts_list.clear()
         if not csv_path or not Path(csv_path).is_file() or not self.variations_row_min_spin.isEnabled():
+            self._variations_current_prompts = {}
             self._last_loaded_variations_prompts = None
             self.variations_prompts_edited_label.setVisible(False)
+            self._update_variations_prompts_summary_label()
             return
         try:
             row_numbers = generate_prompt_variations.parse_row_range(self._variations_row_arg())
             resolved = self._extract_csv_prompt_rows(csv_path, row_numbers)
         except Exception:
+            self._variations_current_prompts = {}
             self._last_loaded_variations_prompts = None
             self.variations_prompts_edited_label.setVisible(False)
+            self._update_variations_prompts_summary_label()
             return
 
-        baseline = {}
-        for row_num, text, _source_label in resolved:
-            if not text:
-                continue
-            item = QListWidgetItem(text)
-            item.setFlags(item.flags() | Qt.ItemIsEditable)
-            item.setData(Qt.UserRole, row_num)
-            item.setToolTip(f"Row {row_num}")
-            self.variations_prompts_list.addItem(item)
-            baseline[row_num] = text
-
-        self._last_loaded_variations_prompts = baseline
+        prompts = {row_num: text for row_num, text, _source_label in resolved if text}
+        self._variations_current_prompts = prompts
+        self._last_loaded_variations_prompts = dict(prompts)
         self.variations_prompts_edited_label.setVisible(False)
+        self._update_variations_prompts_summary_label()
 
-    def _current_variations_prompts(self):
-        """{row_num: current_text} for whatever's left in the prompts list -
-        a deleted row is simply absent, an edited row carries its
-        overridden text."""
-        return {
-            self.variations_prompts_list.item(i).data(Qt.UserRole): self.variations_prompts_list.item(i).text()
-            for i in range(self.variations_prompts_list.count())
-        }
+    def _update_variations_prompts_summary_label(self):
+        n = len(self._variations_current_prompts)
+        self.variations_prompts_button.setEnabled(n > 0)
+        if n:
+            self.variations_prompts_summary_label.setText(f"{n} prompt(s) loaded")
+        else:
+            self.variations_prompts_summary_label.setText("(load a CSV above to browse/edit its prompts)")
+
+    def _on_edit_variations_prompts_clicked(self):
+        ordered = sorted(self._variations_current_prompts.items())
+        dialog = VariationsPromptsDialog(ordered, self)
+        if dialog.exec():
+            self._variations_current_prompts = dialog.current_prompts
+            self._update_variations_prompts_summary_label()
+            self._refresh_variations_edited_state()
 
     def _refresh_variations_edited_state(self):
         if self._last_loaded_variations_prompts is None:
             self.variations_prompts_edited_label.setVisible(False)
             return
         self.variations_prompts_edited_label.setVisible(
-            self._current_variations_prompts() != self._last_loaded_variations_prompts
+            self._variations_current_prompts != self._last_loaded_variations_prompts
         )
-
-    def _on_variations_prompts_item_changed(self, _item):
-        self._refresh_variations_edited_state()
-
-    def _remove_selected_variations_prompt(self):
-        item = self.variations_prompts_list.currentItem()
-        if item is None:
-            return
-        self.variations_prompts_list.takeItem(self.variations_prompts_list.row(item))
-        self._refresh_variations_edited_state()
 
     def _on_browse_prompts_csv(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose prompt CSV", self.prompts_csv_edit.text() or str(CONFIGS_DIR), "CSV files (*.csv)"
+            self, "Choose prompt CSV", self.prompts_csv_edit.text() or self._csv_browse_default_dir(), "CSV files (*.csv)"
         )
         if path:
             self.prompts_csv_edit.setText(path)
@@ -1334,39 +1374,60 @@ class MainWindow(QMainWindow):
             self.prompts_row_min_spin, self.prompts_row_max_spin,
         )
         if not getattr(self, "_suppress_prompt_autoload", False):
-            self._load_prompts_from_csv_into_box()
+            self._load_prompts_from_csv()
 
     def _on_prompts_range_changed(self, _value=None):
         if not getattr(self, "_suppress_prompt_autoload", False):
-            self._load_prompts_from_csv_into_box()
+            self._load_prompts_from_csv()
+
+    def _write_adhoc_prompt_csv(self, text):
+        """Writes a single-row CSV so a manually-typed prompt (no CSV
+        loaded) can flow through the exact same generate_prompt_variations.
+        run_batch() path as a CSV-backed one - lands its "Variations"
+        output under configs/Variations/, a predictable, discoverable
+        location instead of a scattered temp directory."""
+        CONFIGS_DIR.mkdir(exist_ok=True)
+        adhoc_path = CONFIGS_DIR / "adhoc_prompt.csv"
+        with open(adhoc_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.writer(f)
+            writer.writerow(["File Name", "Positive Prompt"])
+            writer.writerow(["adhoc_prompt", text])
+        return str(adhoc_path)
 
     def _build_variations_config(self):
         csv_path = self.variations_csv_edit.text().strip()
+        prompt_overrides = None
+
         if not csv_path:
-            QMessageBox.warning(self, "No CSV file", "Choose a prompt CSV file first.")
-            return None
-        if not Path(csv_path).is_file():
-            QMessageBox.warning(self, "CSV not found", f"File not found:\n{csv_path}")
-            return None
+            single_prompt = self.variations_single_prompt_edit.text().strip()
+            if not single_prompt:
+                QMessageBox.warning(self, "No prompt", "Choose a CSV file, or type/paste a single prompt.")
+                return None
+            csv_path = self._write_adhoc_prompt_csv(single_prompt)
+            rows = [1]
+        else:
+            if not Path(csv_path).is_file():
+                QMessageBox.warning(self, "CSV not found", f"File not found:\n{csv_path}")
+                return None
+            if not self.variations_row_min_spin.isEnabled():
+                QMessageBox.warning(self, "No rows", "The CSV file has no data rows, or hasn't loaded yet.")
+                return None
 
-        if not self.variations_row_min_spin.isEnabled():
-            QMessageBox.warning(self, "No rows", "The CSV file has no data rows, or hasn't loaded yet.")
-            return None
+            current_prompts = self._variations_current_prompts
+            if not current_prompts:
+                QMessageBox.warning(self, "No prompts", "The prompts list is empty - adjust the row range above, or it has no rows left.")
+                return None
 
-        current_prompts = self._current_variations_prompts()
-        if not current_prompts:
-            QMessageBox.warning(self, "No prompts", "The prompts list is empty - adjust the row range above, or it has no rows left.")
-            return None
-
-        baseline = self._last_loaded_variations_prompts or {}
-        prompt_overrides = {
-            row_num: text for row_num, text in current_prompts.items()
-            if baseline.get(row_num) != text
-        }
+            baseline = self._last_loaded_variations_prompts or {}
+            prompt_overrides = {
+                row_num: text for row_num, text in current_prompts.items()
+                if baseline.get(row_num) != text
+            }
+            rows = sorted(current_prompts)
 
         config = {
             "csv_path": csv_path,
-            "rows": sorted(current_prompts),
+            "rows": rows,
             "count": self.variations_count_spin.value(),
             "model": self.variations_model_edit.text().strip() or generate_prompt_variations.DEFAULT_MODEL,
         }
@@ -1529,25 +1590,53 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(QLabel(
             "Every logged run - Model/LoRA test runs, and Variations runs "
-            "that were queued to ComfyUI - newest first. Double-click one to "
-            "browse its output images in a window here (not the OS file "
-            "browser). A still-in-progress run is fine to open - this never "
-            "polls ComfyUI, it just shows whatever's on disk right now."
+            "that were queued to ComfyUI - newest first. Select one to see "
+            "its output images on the right (not the OS file browser); "
+            "double-click a thumbnail to view it full size. A still-in-"
+            "progress run is fine to select - this never polls ComfyUI, it "
+            "just shows whatever's on disk right now."
         ))
 
+        splitter = QSplitter(Qt.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
         self.results_list = QListWidget()
-        self.results_list.itemDoubleClicked.connect(self._on_open_result_run)
-        layout.addWidget(self.results_list, 1)
+        # NoFocus stops Qt from auto-selecting row 0 the moment the list
+        # becomes visible (its normal behavior for a focusable, populated
+        # view) - nothing should be selected/shown until the user actually
+        # clicks a run. Mouse clicks still select items fine either way.
+        self.results_list.setFocusPolicy(Qt.NoFocus)
+        self.results_list.currentItemChanged.connect(self._on_results_selection_changed)
+        left_layout.addWidget(self.results_list, 1)
 
         buttons_row = QHBoxLayout()
         refresh_button = QPushButton("Refresh")
         refresh_button.clicked.connect(self._refresh_results_list)
         buttons_row.addWidget(refresh_button)
-        open_button = QPushButton("Open selected")
-        open_button.clicked.connect(lambda: self._on_open_result_run(self.results_list.currentItem()))
-        buttons_row.addWidget(open_button)
-        buttons_row.addStretch(1)
-        layout.addLayout(buttons_row)
+        delete_button = QPushButton("Delete selected")
+        delete_button.setToolTip("Deletes this run's log and its output images. Cannot be undone.")
+        delete_button.clicked.connect(self._on_delete_selected_result)
+        buttons_row.addWidget(delete_button)
+        left_layout.addLayout(buttons_row)
+        splitter.addWidget(left)
+
+        self.results_images_view = QListWidget()
+        self.results_images_view.setViewMode(QListWidget.IconMode)
+        self.results_images_view.setIconSize(QSize(120, 120))
+        self.results_images_view.setResizeMode(QListWidget.Adjust)
+        self.results_images_view.setMovement(QListWidget.Static)
+        self.results_images_view.setSpacing(2)
+        self.results_images_view.setUniformItemSizes(True)
+        self.results_images_view.itemDoubleClicked.connect(self._on_open_full_image)
+        splitter.addWidget(self.results_images_view)
+
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([450, 900])  # left (run list) panel ~50% wider than a bare default
+        layout.addWidget(splitter, 1)
+        self._results_splitter = splitter
 
         self._refresh_results_list()
 
@@ -1555,6 +1644,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_results_list(self):
         self.results_list.clear()
+        self.results_images_view.clear()
         if not RUNS_DIR.is_dir():
             return
         log_paths = sorted(RUNS_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
@@ -1607,13 +1697,64 @@ class MainWindow(QMainWindow):
         images.sort()
         return images
 
-    def _on_open_result_run(self, item):
-        if item is None:
+    def _on_results_selection_changed(self, current, _previous):
+        self.results_images_view.clear()
+        if current is None:
             return
         if not self.settings.get("comfyui_install_dir"):
-            QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
+            return
+        log_path = Path(current.data(Qt.UserRole))
+        icon_size = self.results_images_view.iconSize()
+        for path in self._resolve_run_images(log_path):
+            pixmap = QPixmap(str(path))
+            if pixmap.isNull():
+                continue
+            scaled = pixmap.scaled(icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            item = QListWidgetItem(QIcon(scaled), "")
+            item.setData(Qt.UserRole, str(path))
+            item.setToolTip(path.name)
+            self.results_images_view.addItem(item)
+
+    def _on_open_full_image(self, item):
+        path = item.data(Qt.UserRole)
+        pixmap = QPixmap(path)
+        if pixmap.isNull():
+            return
+        dialog = QDialog(self)
+        dialog.setWindowTitle(Path(path).name)
+        layout = QVBoxLayout(dialog)
+        label = QLabel()
+        screen_size = self.screen().availableSize() if self.screen() else QSize(1000, 800)
+        max_size = QSize(int(screen_size.width() * 0.85), int(screen_size.height() * 0.85))
+        label.setPixmap(pixmap.scaled(max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+        layout.addWidget(label)
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        buttons.rejected.connect(dialog.close)
+        layout.addWidget(buttons)
+        dialog.exec()
+
+    def _on_delete_selected_result(self):
+        item = self.results_list.currentItem()
+        if item is None:
             return
         log_path = Path(item.data(Qt.UserRole))
-        images = self._resolve_run_images(log_path)
-        dialog = ResultImagesDialog(log_path.stem, images, self)
-        dialog.exec()
+        images = self._resolve_run_images(log_path) if self.settings.get("comfyui_install_dir") else []
+
+        message = f"Delete this run's log ({log_path.name})"
+        if images:
+            message += f" and its {len(images)} output image(s)"
+        message += "?\n\nThis cannot be undone."
+        if QMessageBox.question(self, "Delete run", message) != QMessageBox.Yes:
+            return
+
+        for image_path in images:
+            try:
+                image_path.unlink()
+            except OSError as e:
+                self._log(f"Warning: could not delete {image_path}: {e}")
+        try:
+            log_path.unlink()
+        except OSError as e:
+            self._log(f"Warning: could not delete {log_path}: {e}")
+
+        self._refresh_results_list()
