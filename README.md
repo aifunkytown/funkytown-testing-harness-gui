@@ -74,20 +74,24 @@ previous runs' output images).
 
 - **Workflow selector** (shared, top of the tab) - dropdown of workflow
   files found in your ComfyUI installation's `user/default/workflows` folder
-  (configured in Settings), plus a **Prompt** box - a scrollable, freely
-  editable multi-line text box. Leave it blank to use the workflow's own
-  prompt; type one line to override it; type two or more lines to sweep
-  every model/LoRA combo configured on the Model/LoRA tabs against each
-  line - e.g. 2 models x 4 LoRA combinations x 10 prompt lines queues 80
-  runs (requires `funkytown-testing-harness`'s `"positive_prompts"` config
-  support). **Load from CSV** plus **Min row**/**Max row** counters populate
-  the box with a CSV's resolved prompt text (Cleaned Prompt if present,
-  otherwise Positive Prompt) - one line per row, defaulting to the CSV's
-  full row range; changing the CSV file or the row range always overwrites
-  the box with a fresh pull. Once loaded, lines can be freely edited or
-  deleted (never writes back to the source CSV) - a red **edited** label
-  appears next to Max row whenever the box's content no longer matches a
-  fresh pull of the current CSV/row range. The **Use Default LoRAs**
+  (configured in Settings), plus a **Prompt** section - **Prompts...** opens
+  a popup listing the current prompt list, each as its own row with a ✕
+  button to remove it, plus a text box at the bottom to type and add a new
+  one (existing rows aren't directly text-editable - remove and re-add to
+  change one's wording). A summary next to the button shows what's
+  currently set. No prompts means use the workflow's own; one means
+  override it; two or more sweeps every model/LoRA combo configured on the
+  Model/LoRA tabs against each one - e.g. 2 models x 4 LoRA combinations x
+  10 prompts queues 80 runs (requires `funkytown-testing-harness`'s
+  `"positive_prompts"` config support). **Load from CSV** plus **Min
+  row**/**Max row** counters populate the list with a CSV's resolved prompt
+  text (Cleaned Prompt if present, otherwise Positive Prompt) - one entry
+  per row, defaulting to the CSV's full row range; changing the CSV file or
+  the row range always overwrites the list with a fresh pull. Once loaded,
+  prompts can be freely removed via the popup (never writes back to the
+  source CSV) - a red **edited** label appears next to Max row whenever the
+  list no longer matches a fresh pull of the current CSV/row range. The
+  **Use Default LoRAs**
   checkbox only applies on the Model tab (it's
   disabled on the LoRA tab, since a LoRA run needs those slots to stay present) -
   unchecked by default, meaning this run's queued workflow gets its Power
@@ -151,9 +155,9 @@ previous runs' output images).
   wiping it out. An older lora_test.py config's singular `"model"` key (no
   `"models"` list) is folded into the Model tab's list the same way, since
   there's no separate LoRA-tab model field to hold it any more. Also saves
-  the Prompt box's exact current content (`"positive_prompt"` for 0-1
-  lines, `"positive_prompts"` for 2+) - not a live CSV reference, so an
-  edited/trimmed line list round-trips exactly as saved. If a CSV was used
+  the prompt list's exact current content (`"positive_prompt"` for 0-1
+  prompts, `"positive_prompts"` for 2+) - not a live CSV reference, so an
+  edited/trimmed list round-trips exactly as saved. If a CSV was used
   to load it, `"positive_prompts_csv"`/`"positive_prompts_min_row"`/
   `"positive_prompts_max_row"` are also saved purely as a convenience for
   reloading that picker later; importing recomputes the **edited** label
@@ -169,8 +173,7 @@ After confirming, the assembled config is written to this project's own
 on which `run()` function is being used) and run on a background thread so
 the window doesn't freeze. Progress streams into the tab's own collapsible
 **Log** section at the bottom (collapsed by default - click the arrow to
-expand; it overlays the window's existing content rather than resizing the
-window, so it can extend past the window's edges if there isn't room), the
+expand; the window grows to fit it, so it's never clipped or hidden), the
 same messages the CLI would print.
 
 ### Variations tab
@@ -187,7 +190,7 @@ to edit its text (overriding what gets varied for that row, while every
 other column - File Name, Negative Prompt, etc. - still comes from the CSV
 row as normal), or select a line and **Remove selected** to skip that row
 entirely; neither ever touches the source CSV file. Unlike the Testing
-tab's Prompt box, no new unattached lines can be added here - each line is
+tab's Prompts popup, no new unattached lines can be added here - each line is
 always tied to a specific CSV row, since a Variations run needs that row's
 other metadata to write its output. A red **edited** label appears next to
 Max row whenever the list no longer matches a fresh pull of the current
@@ -226,28 +229,34 @@ why) - the GUI just makes it faster to build a config and watch it queue.
 
 ### Results tab
 
-Lists every logged run from `funkytown-testing-harness`'s `runs/` folder,
-newest first - both Model/LoRA test runs (`run_test.py`/`lora_test.py`) and
-Variations runs that were queued to ComfyUI (a "Queue Generated Variations"
-run writes its own log there too, alongside the Testing tab's, instead of
-the single shared `rerun_log.csv` `rerun_prompts_comfyui.py` normally
-overwrites on every invocation - so each queue run gets its own permanent
-entry here). Each entry shows how many prompts it queued; **Refresh**
-re-scans the folder (also done automatically after Run Test or Queue
-Generated Variations finishes), and double-clicking one (or **Open
-selected**) opens its output images in a window here - a file list next to
-a scaled preview - never the OS file browser. This never polls ComfyUI, it
-just globs whatever's currently on disk under your configured ComfyUI
-installation's `output` folder for that run's logged filename prefixes, so
-a still-in-progress run is fine to open - it just shows fewer images than
-it'll end up with. Requires the ComfyUI installation folder to be set in
-Settings (same setting the Workflow selector uses).
+A split view: the left side lists every logged run from
+`funkytown-testing-harness`'s `runs/` folder, newest first - both Model/LoRA
+test runs (`run_test.py`/`lora_test.py`) and Variations runs that were
+queued to ComfyUI (a "Queue Generated Variations" run writes its own log
+there too, alongside the Testing tab's, instead of the single shared
+`rerun_log.csv` `rerun_prompts_comfyui.py` normally overwrites on every
+invocation - so each queue run gets its own permanent entry here). Each
+entry shows how many prompts it queued. Selecting a run fills the right
+side with a tightly-packed grid of thumbnails for its output images - never
+the OS file browser - double-click a thumbnail to view it full size.
+**Refresh** re-scans the folder (also done automatically after Run Test or
+Queue Generated Variations finishes); **Delete selected** removes a run's
+log and its output images after confirming (cannot be undone). This never
+polls ComfyUI, it just globs whatever's currently on disk under your
+configured ComfyUI installation's `output` folder for that run's logged
+filename prefixes, so a still-in-progress run is fine to select - it just
+shows fewer images than it'll end up with. Requires the ComfyUI
+installation folder to be set in Settings (same setting the Workflow
+selector uses).
 
 Each `run_test.py`/`lora_test.py` run writes its images under their own
 `tests/<name>/<run_id>/...` directory (`run_id` a short random id, fresh
 per run) rather than everyone sharing `tests/<name>/...`, so two runs with
 the same name never comingle their images - this is what makes a precise
-per-run image snapshot possible at all.
+per-run image snapshot possible at all. Each image's filename also starts
+with a zero-padded queue number, so sorting by name (including in the
+thumbnail grid here) always matches the order things were actually queued
+in, regardless of how model/LoRA names alphabetize.
 
 ## Launcher exe
 
