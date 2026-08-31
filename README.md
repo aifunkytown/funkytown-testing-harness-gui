@@ -165,11 +165,12 @@ previous runs' output images).
   `"positive_prompts_max_row"` are also saved purely as a convenience for
   reloading that picker later; importing recomputes the **edited** label
   against a fresh pull of that CSV/range rather than trusting a stale flag.
-- **Settings menu** - currently just **Hide Explicit**, checked by default
-  and persisted across launches - hides any aspect
-  `prompt_aspect_vocab.json` marks explicit (its `_explicit_aspects` list)
-  from the Variations tab's aspect checklist. Uncheck it to reveal them
-  again.
+- **Settings menu** - **Hide Explicit**, checked by default and persisted
+  across launches - hides any aspect `prompt_aspect_vocab.json` marks
+  explicit (its `_explicit_aspects` list) from the Variations tab's aspect
+  checklist. Uncheck it to reveal them again. **Dark Mode**, also checked by
+  default and persisted - switches the whole app to a dark Fusion palette;
+  toggling it applies immediately, no restart needed.
 
 After confirming, the assembled config is written to this project's own
 `gui_last_model_run.json` or `gui_last_lora_run.json` (gitignored, depending

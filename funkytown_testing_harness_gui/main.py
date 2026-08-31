@@ -61,8 +61,10 @@ def main():
     from PySide6.QtWidgets import QApplication
 
     from funkytown_testing_harness_gui.main_window import MainWindow
+    from funkytown_testing_harness_gui.theme import apply_theme
 
     app = QApplication(sys.argv)
+    apply_theme(app, bool(settings.get("dark_mode", True)))
     window = MainWindow()
     window.show()
     sys.exit(app.exec())

@@ -57,6 +57,7 @@ from funkytown_testing_harness_gui.model_config_dialog import ModelConfigDialog
 from funkytown_testing_harness_gui.prompts_dialog import PromptsDialog
 from funkytown_testing_harness_gui.runner_thread import TestRunnerThread
 from funkytown_testing_harness_gui.settings_dialog import SettingsDialog
+from funkytown_testing_harness_gui.theme import apply_theme
 from funkytown_testing_harness_gui.variations_prompts_dialog import VariationsPromptsDialog
 
 # Wherever funkytown_testing_harness actually resolved from (default sibling
@@ -134,10 +135,20 @@ class MainWindow(QMainWindow):
         )
         self.hide_explicit_action.toggled.connect(self._on_hide_explicit_toggled)
 
+        self.dark_mode_action = settings_menu.addAction("Dark Mode")
+        self.dark_mode_action.setCheckable(True)
+        self.dark_mode_action.setChecked(bool(self.settings.get("dark_mode", True)))
+        self.dark_mode_action.toggled.connect(self._on_dark_mode_toggled)
+
     def _on_hide_explicit_toggled(self, checked):
         self.settings["hide_explicit_aspects"] = checked
         save_settings(self.settings)
         self._populate_variations_aspect_list()
+
+    def _on_dark_mode_toggled(self, checked):
+        self.settings["dark_mode"] = checked
+        save_settings(self.settings)
+        apply_theme(QApplication.instance(), checked)
 
     # ---- outer "Testing" tab: everything that existed before the Variations tab ----
 
