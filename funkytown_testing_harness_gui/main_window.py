@@ -1624,9 +1624,10 @@ class MainWindow(QMainWindow):
         self.create_grid_button = QPushButton("Create Grid")
         self.create_grid_button.setEnabled(False)
         self.create_grid_button.setToolTip(
-            "Builds a labeled side-by-side comparison image from this run's "
-            "output images (one column per model/LoRA combo, wrapping onto "
-            "additional rows past 4)."
+            "Builds a labeled side-by-side comparison image from whichever "
+            "images are checked in the gallery on the right (one column "
+            "per model/LoRA combo, wrapping onto additional rows past 4) - "
+            "check at least 2 first."
         )
         self.create_grid_button.clicked.connect(self._on_create_grid_clicked)
         buttons_row.addWidget(self.create_grid_button)
@@ -1803,6 +1804,13 @@ class MainWindow(QMainWindow):
             return
         self._log(f"Saved {path.name} to {chosen_path}")
 
+    def _checked_result_images(self):
+        return [
+            Path(self.results_images_view.item(i).data(Qt.UserRole))
+            for i in range(self.results_images_view.count())
+            if self.results_images_view.item(i).checkState() == Qt.Checked
+        ]
+
     def _on_create_grid_clicked(self):
         item = self.results_list.currentItem()
         if item is None:
@@ -1812,12 +1820,20 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
             return
 
+        selected_images = self._checked_result_images()
+        if len(selected_images) < 2:
+            QMessageBox.warning(
+                self, "Not enough images selected",
+                "Check at least 2 images in the gallery on the right to create a grid from them.",
+            )
+            return
+
         log_path = Path(item.data(Qt.UserRole))
         output_dir = Path(comfyui_install_dir) / "output"
         grid_path = RUNS_DIR / "grids" / f"{log_path.stem}_grid.png"
 
         try:
-            comparison_grid.build_comparison_grid(log_path, output_dir, grid_path)
+            comparison_grid.build_comparison_grid(log_path, output_dir, grid_path, selected_images=selected_images)
         except ValueError as e:
             QMessageBox.warning(self, "Can't create grid", str(e))
             return
@@ -1826,8 +1842,7 @@ class MainWindow(QMainWindow):
             return
 
         self._log(f"Comparison grid saved to {grid_path}")
-        run_images = self._resolve_run_images(log_path)
-        images_dir = run_images[0].parent if run_images else None
+        images_dir = selected_images[0].parent
         self._show_full_image_dialog(grid_path, default_save_dir=images_dir)
 
     def _on_delete_selected_result(self):

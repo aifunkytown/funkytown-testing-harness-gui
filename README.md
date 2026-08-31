@@ -242,20 +242,20 @@ invocation - so each queue run gets its own permanent entry here). Each
 entry shows how many prompts it queued. Nothing is selected by default -
 the right side stays blank until you click a run, which then fills it with
 a tightly-packed, checkable grid of thumbnails for its output images -
-never the OS file browser. Click a thumbnail to check/uncheck it (there's
-no wired-up bulk action for a checked set yet - it's there for a future
-one), or **Select All** to check every thumbnail at once; double-click one
-to view it full size. **Refresh** re-scans the folder and stays on whichever
-run was already selected, just bringing its image grid up to date (also
-done automatically after Run Test or Queue Generated Variations finishes);
+never the OS file browser. Click a thumbnail to check/uncheck it, or
+**Select All** to check every thumbnail at once; double-click one to view
+it full size. **Refresh** re-scans the folder and stays on whichever run
+was already selected, just bringing its image grid up to date (also done
+automatically after Run Test or Queue Generated Variations finishes);
 **Delete selected** removes a run's log and its output images after
-confirming (cannot be undone); **Create Grid** (also needs a run selected)
-builds a single labeled side-by-side comparison image from that run's
-output - one column per model/LoRA combo, wrapping onto additional rows
-past 4 columns - saved under `funkytown-testing-harness`'s `runs/grids/`
-folder and opened the same way a thumbnail does, except its viewer also has
-a **Save** button for exporting a copy elsewhere, defaulting to the same
-folder the run's own output images live in. None of this polls ComfyUI, it
+confirming (cannot be undone); **Create Grid** builds a single labeled
+side-by-side comparison image from whichever images are currently checked
+(at least 2 required) - one column per model/LoRA combo, wrapping onto
+additional rows past 4 columns - saved under `funkytown-testing-harness`'s
+`runs/grids/` folder and opened the same way a thumbnail does, except its
+viewer also has a **Save** button for exporting a copy elsewhere,
+defaulting to the same folder the run's own output images live in. None of
+this polls ComfyUI, it
 just globs whatever's currently on disk under your configured ComfyUI
 installation's `output` folder for that run's logged filename prefixes, so
 a still-in-progress run is fine to select or grid - it just shows/uses
