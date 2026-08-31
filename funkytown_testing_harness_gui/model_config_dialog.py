@@ -37,7 +37,7 @@ class KSamplerConfigRow:
 
     FIELDS = ("sampler_name", "steps", "cfg", "scheduler", "seed", "denoise")
 
-    FALLBACK_DEFAULTS = {"cfg": 1, "steps": 8, "sampler_name": "euler", "scheduler": "beta"}
+    FALLBACK_DEFAULTS = {"cfg": 1, "steps": 8, "sampler_name": "euler", "scheduler": "beta", "seed": 0, "denoise": 1.0}
 
     def __init__(self, sampler_names, schedulers, defaults=None):
         merged_defaults = {**self.FALLBACK_DEFAULTS, **(defaults or {})}
@@ -52,8 +52,8 @@ class KSamplerConfigRow:
         self._add_spin_row(layout, "steps", "Steps", minimum=1, maximum=200, default=merged_defaults["steps"])
         self._add_double_row(layout, "cfg", "CFG", minimum=0.0, maximum=30.0, default=merged_defaults["cfg"])
         self._add_combo_row(layout, "scheduler", "Scheduler", schedulers, default=merged_defaults["scheduler"])
-        self._add_spin_row(layout, "seed", "Seed", minimum=0, maximum=2**31 - 1, default=0)
-        self._add_double_row(layout, "denoise", "Denoise", minimum=0.0, maximum=1.0, default=1.0)
+        self._add_spin_row(layout, "seed", "Seed", minimum=0, maximum=2**31 - 1, default=int(merged_defaults["seed"]))
+        self._add_double_row(layout, "denoise", "Denoise", minimum=0.0, maximum=1.0, default=merged_defaults["denoise"])
 
     def _add_combo_row(self, layout, key, label, options, default=None):
         row = QHBoxLayout()
