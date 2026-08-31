@@ -638,16 +638,31 @@ class MainWindow(QMainWindow):
         self._sampler_names = comfy_client.list_sampler_names(self.settings["server"]) or ["euler"]
         self._schedulers = comfy_client.list_schedulers(self.settings["server"]) or ["normal"]
 
+    def _open_model_config_dialog(self, model_name, initial_configs):
+        """Shared by _on_add_model/_edit_model - wrapped in a try/except
+        that surfaces the actual error instead of the dialog silently never
+        appearing, since ModelConfigDialog's starting values are built from
+        live-fetched workflow data (self._ksampler_defaults) that can't be
+        fully validated ahead of time."""
+        try:
+            return ModelConfigDialog(
+                model_name, self._sampler_names, self._schedulers, self,
+                initial_configs=initial_configs, defaults=self._ksampler_defaults,
+            )
+        except Exception as e:
+            QMessageBox.critical(
+                self, "Couldn't open model config",
+                f"{type(e).__name__}: {e}\n\nThis is a bug - please report it with this message.",
+            )
+            return None
+
     def _on_add_model(self):
         model_name = self.model_combo.currentText().strip()
         if not model_name:
             return
         initial = self._models.get(model_name, [{}])
-        dialog = ModelConfigDialog(
-            model_name, self._sampler_names, self._schedulers, self,
-            initial_configs=initial, defaults=self._ksampler_defaults,
-        )
-        if dialog.exec():
+        dialog = self._open_model_config_dialog(model_name, initial)
+        if dialog is not None and dialog.exec():
             self._models[model_name] = dialog.configs
             self._rebuild_models_list()
 
@@ -660,11 +675,8 @@ class MainWindow(QMainWindow):
         model_name = list_text.split("  —")[0].strip()
         if model_name not in self._models:
             return
-        dialog = ModelConfigDialog(
-            model_name, self._sampler_names, self._schedulers, self,
-            initial_configs=self._models[model_name], defaults=self._ksampler_defaults,
-        )
-        if dialog.exec():
+        dialog = self._open_model_config_dialog(model_name, self._models[model_name])
+        if dialog is not None and dialog.exec():
             self._models[model_name] = dialog.configs
             self._rebuild_models_list()
 
