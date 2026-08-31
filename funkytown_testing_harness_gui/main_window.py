@@ -8,6 +8,7 @@ their own CLIs do, so behavior is identical either way.
 import csv
 import datetime
 import json
+import shutil
 from pathlib import Path
 
 import funkytown_testing_harness
@@ -1632,6 +1633,14 @@ class MainWindow(QMainWindow):
         left_layout.addLayout(buttons_row)
         splitter.addWidget(left)
 
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.select_all_images_check = QCheckBox("Select All")
+        self.select_all_images_check.stateChanged.connect(self._on_select_all_images_toggled)
+        right_layout.addWidget(self.select_all_images_check)
+
         self.results_images_view = QListWidget()
         self.results_images_view.setViewMode(QListWidget.IconMode)
         self.results_images_view.setIconSize(QSize(120, 120))
@@ -1639,8 +1648,10 @@ class MainWindow(QMainWindow):
         self.results_images_view.setMovement(QListWidget.Static)
         self.results_images_view.setSpacing(2)
         self.results_images_view.setUniformItemSizes(True)
+        self.results_images_view.itemClicked.connect(self._on_results_image_clicked)
         self.results_images_view.itemDoubleClicked.connect(self._on_open_full_image)
-        splitter.addWidget(self.results_images_view)
+        right_layout.addWidget(self.results_images_view, 1)
+        splitter.addWidget(right)
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
@@ -1653,6 +1664,13 @@ class MainWindow(QMainWindow):
         return page
 
     def _refresh_results_list(self):
+        """Re-scans runs/ for the list on the left. Re-selects whichever run
+        was previously current (if it's still there) instead of dropping
+        back to no selection - Refresh should just bring the image panel on
+        the right up to date, not lose your place."""
+        previously_selected = self.results_list.currentItem()
+        previously_selected_log = previously_selected.data(Qt.UserRole) if previously_selected else None
+
         self.results_list.clear()
         self.results_images_view.clear()
         if not RUNS_DIR.is_dir():
@@ -1663,6 +1681,8 @@ class MainWindow(QMainWindow):
             item = QListWidgetItem(f"{log_path.stem}   ({kind}, {len(prefixes)} queued)")
             item.setData(Qt.UserRole, str(log_path))
             self.results_list.addItem(item)
+            if previously_selected_log is not None and str(log_path) == previously_selected_log:
+                self.results_list.setCurrentItem(item)
 
     def _read_run_log_summary(self, log_path):
         """(kind, prefixes) for a runs/*.csv log - kind is "Variations Queue"
@@ -1709,6 +1729,9 @@ class MainWindow(QMainWindow):
 
     def _on_results_selection_changed(self, current, _previous):
         self.results_images_view.clear()
+        self._suppress_select_all_toggle = True
+        self.select_all_images_check.setChecked(False)
+        self._suppress_select_all_toggle = False
         self.create_grid_button.setEnabled(current is not None)
         if current is None:
             return
@@ -1722,29 +1745,63 @@ class MainWindow(QMainWindow):
                 continue
             scaled = pixmap.scaled(icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             item = QListWidgetItem(QIcon(scaled), "")
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
             item.setData(Qt.UserRole, str(path))
             item.setToolTip(path.name)
             self.results_images_view.addItem(item)
 
+    def _on_results_image_clicked(self, item):
+        item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+
+    def _on_select_all_images_toggled(self, _state):
+        if getattr(self, "_suppress_select_all_toggle", False):
+            return
+        check_state = Qt.Checked if self.select_all_images_check.isChecked() else Qt.Unchecked
+        for i in range(self.results_images_view.count()):
+            self.results_images_view.item(i).setCheckState(check_state)
+
     def _on_open_full_image(self, item):
         self._show_full_image_dialog(item.data(Qt.UserRole))
 
-    def _show_full_image_dialog(self, path):
+    def _show_full_image_dialog(self, path, default_save_dir=None):
+        path = Path(path)
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
             return
         dialog = QDialog(self)
-        dialog.setWindowTitle(Path(path).name)
+        dialog.setWindowTitle(path.name)
         layout = QVBoxLayout(dialog)
         label = QLabel()
         screen_size = self.screen().availableSize() if self.screen() else QSize(1000, 800)
         max_size = QSize(int(screen_size.width() * 0.85), int(screen_size.height() * 0.85))
         label.setPixmap(pixmap.scaled(max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         layout.addWidget(label)
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+
+        if default_save_dir is not None:
+            buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Close)
+            buttons.button(QDialogButtonBox.Save).clicked.connect(
+                lambda: self._on_save_image_clicked(path, default_save_dir)
+            )
+        else:
+            buttons = QDialogButtonBox(QDialogButtonBox.Close)
         buttons.rejected.connect(dialog.close)
         layout.addWidget(buttons)
         dialog.exec()
+
+    def _on_save_image_clicked(self, path, default_save_dir):
+        default_path = Path(default_save_dir) / path.name
+        chosen_path, _ = QFileDialog.getSaveFileName(
+            self, "Save image", str(default_path), "PNG files (*.png)"
+        )
+        if not chosen_path:
+            return
+        try:
+            shutil.copyfile(path, chosen_path)
+        except OSError as e:
+            QMessageBox.critical(self, "Save failed", str(e))
+            return
+        self._log(f"Saved {path.name} to {chosen_path}")
 
     def _on_create_grid_clicked(self):
         item = self.results_list.currentItem()
@@ -1769,7 +1826,9 @@ class MainWindow(QMainWindow):
             return
 
         self._log(f"Comparison grid saved to {grid_path}")
-        self._show_full_image_dialog(grid_path)
+        run_images = self._resolve_run_images(log_path)
+        images_dir = run_images[0].parent if run_images else None
+        self._show_full_image_dialog(grid_path, default_save_dir=images_dir)
 
     def _on_delete_selected_result(self):
         item = self.results_list.currentItem()
