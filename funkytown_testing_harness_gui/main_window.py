@@ -13,8 +13,9 @@ from pathlib import Path
 
 import funkytown_testing_harness
 from PySide6.QtCore import QSize, Qt, QTimer
-from PySide6.QtGui import QFont, QIcon, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
     QCheckBox,
     QComboBox,
@@ -87,6 +88,7 @@ class MainWindow(QMainWindow):
         self._models = {}  # model_name -> list[dict] (configs)
         self._loras = {}  # lora_name -> list[float] (weights)
         self._prompts = []  # Testing tab's prompt list - see Prompts... popup
+        self._results_gallery_anchor_row = None  # last plain-clicked row, for Shift+click range-check
         self._runner_thread = None
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
         self._defaults_thread = None
@@ -1638,8 +1640,8 @@ class MainWindow(QMainWindow):
         self.create_grid_button.setToolTip(
             "Builds a labeled side-by-side comparison image from whichever "
             "images are checked in the gallery on the right (one column "
-            "per model/LoRA combo, wrapping onto additional rows past 4) - "
-            "check at least 2 first."
+            "per model/LoRA combo, up to 10 per image - more spill into "
+            "additional numbered files) - check at least 2 first."
         )
         self.create_grid_button.clicked.connect(self._on_create_grid_clicked)
         buttons_row.addWidget(self.create_grid_button)
@@ -1742,6 +1744,7 @@ class MainWindow(QMainWindow):
 
     def _on_results_selection_changed(self, current, _previous):
         self.results_images_view.clear()
+        self._results_gallery_anchor_row = None  # stale row indices once the gallery's rebuilt
         self._suppress_select_all_toggle = True
         self.select_all_images_check.setChecked(False)
         self._suppress_select_all_toggle = False
@@ -1753,26 +1756,80 @@ class MainWindow(QMainWindow):
         log_path = Path(current.data(Qt.UserRole))
         icon_size = self.results_images_view.iconSize()
         for path in self._resolve_run_images(log_path):
-            pixmap = QPixmap(str(path))
-            if pixmap.isNull():
+            icon = self._make_thumbnail_icon(path, icon_size, checked=False)
+            if icon is None:
                 continue
-            scaled = pixmap.scaled(icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            item = QListWidgetItem(QIcon(scaled), "")
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
+            item = QListWidgetItem(icon, "")
             item.setData(Qt.UserRole, str(path))
+            item.setData(Qt.UserRole + 1, False)  # checked state - own overlay, not Qt's native checkbox
             item.setToolTip(path.name)
             self.results_images_view.addItem(item)
 
+    def _make_thumbnail_icon(self, path, icon_size, checked):
+        """A thumbnail icon with a green checkmark badge composited onto its
+        bottom-left corner when checked - Qt's native item checkbox always
+        renders to the left of the icon and can't be repositioned without a
+        custom item delegate, so this bakes the indicator into the icon
+        pixmap itself instead."""
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return None
+        scaled = pixmap.scaled(icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        canvas = QPixmap(icon_size)
+        canvas.fill(Qt.transparent)
+        x = (icon_size.width() - scaled.width()) // 2
+        y = (icon_size.height() - scaled.height()) // 2
+        painter = QPainter(canvas)
+        painter.drawPixmap(x, y, scaled)
+        if checked:
+            self._paint_check_badge(painter, x, y + scaled.height())
+        painter.end()
+        return QIcon(canvas)
+
+    def _paint_check_badge(self, painter, image_left, image_bottom):
+        diameter = 22
+        cx = image_left + 3
+        cy = image_bottom - diameter - 3
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setBrush(QColor(46, 160, 67))
+        painter.setPen(QPen(Qt.white, 2))
+        painter.drawEllipse(cx, cy, diameter, diameter)
+        painter.drawLine(cx + 5, cy + 11, cx + 9, cy + 15)
+        painter.drawLine(cx + 9, cy + 15, cx + 17, cy + 6)
+
+    def _set_item_checked(self, item, checked):
+        item.setData(Qt.UserRole + 1, checked)
+        icon = self._make_thumbnail_icon(item.data(Qt.UserRole), self.results_images_view.iconSize(), checked)
+        if icon is not None:
+            item.setIcon(icon)
+
     def _on_results_image_clicked(self, item):
-        item.setCheckState(Qt.Unchecked if item.checkState() == Qt.Checked else Qt.Checked)
+        clicked_row = self.results_images_view.row(item)
+        if QApplication.keyboardModifiers() & Qt.ShiftModifier and self._results_gallery_anchor_row is not None:
+            # Windows-Explorer-style range select: check every thumbnail
+            # between the last plain click and this one, inclusive, in
+            # either direction - doesn't touch anything outside that range,
+            # and doesn't move the anchor (a further shift-click extends
+            # from the same original anchor, not from this one).
+            lo, hi = sorted((self._results_gallery_anchor_row, clicked_row))
+            for i in range(lo, hi + 1):
+                self._set_item_checked(self.results_images_view.item(i), True)
+            return
+
+        self._results_gallery_anchor_row = clicked_row
+        self._set_item_checked(item, not item.data(Qt.UserRole + 1))
 
     def _on_select_all_images_toggled(self, _state):
         if getattr(self, "_suppress_select_all_toggle", False):
             return
-        check_state = Qt.Checked if self.select_all_images_check.isChecked() else Qt.Unchecked
+        checked = self.select_all_images_check.isChecked()
+        icon_size = self.results_images_view.iconSize()
         for i in range(self.results_images_view.count()):
-            self.results_images_view.item(i).setCheckState(check_state)
+            item = self.results_images_view.item(i)
+            item.setData(Qt.UserRole + 1, checked)
+            icon = self._make_thumbnail_icon(item.data(Qt.UserRole), icon_size, checked)
+            if icon is not None:
+                item.setIcon(icon)
 
     def _on_open_full_image(self, item):
         self._show_full_image_dialog(item.data(Qt.UserRole))
@@ -1820,7 +1877,7 @@ class MainWindow(QMainWindow):
         return [
             Path(self.results_images_view.item(i).data(Qt.UserRole))
             for i in range(self.results_images_view.count())
-            if self.results_images_view.item(i).checkState() == Qt.Checked
+            if self.results_images_view.item(i).data(Qt.UserRole + 1)
         ]
 
     def _on_create_grid_clicked(self):
@@ -1833,6 +1890,7 @@ class MainWindow(QMainWindow):
             return
 
         selected_images = self._checked_result_images()
+        self._log(f"Create Grid: {len(selected_images)} image(s) checked in the gallery.")
         if len(selected_images) < 2:
             QMessageBox.warning(
                 self, "Not enough images selected",
@@ -1845,7 +1903,7 @@ class MainWindow(QMainWindow):
         grid_path = RUNS_DIR / "grids" / f"{log_path.stem}_grid.png"
 
         try:
-            comparison_grid.build_comparison_grid(log_path, output_dir, grid_path, selected_images=selected_images)
+            grid_paths = comparison_grid.build_comparison_grid(log_path, output_dir, grid_path, selected_images=selected_images)
         except ValueError as e:
             QMessageBox.warning(self, "Can't create grid", str(e))
             return
@@ -1853,9 +1911,10 @@ class MainWindow(QMainWindow):
             QMessageBox.critical(self, "Grid creation failed", str(e))
             return
 
-        self._log(f"Comparison grid saved to {grid_path}")
+        self._log(f"Comparison grid(s) saved: {', '.join(str(p) for p in grid_paths)}")
         images_dir = selected_images[0].parent
-        self._show_full_image_dialog(grid_path, default_save_dir=images_dir)
+        for path in grid_paths:
+            self._show_full_image_dialog(path, default_save_dir=images_dir)
 
     def _on_delete_selected_result(self):
         item = self.results_list.currentItem()
