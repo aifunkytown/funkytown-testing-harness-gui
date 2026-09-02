@@ -8,6 +8,7 @@ their own CLIs do, so behavior is identical either way.
 import csv
 import datetime
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -78,6 +79,11 @@ GUI_QUEUE_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_queue_variat
 
 MODELS_TAB_INDEX = 0
 LORA_TAB_INDEX = 1
+
+# run_test.py/lora_test.py/rerun_prompts_comfyui.py all name their log
+# "<name>_<started-at:%Y%m%d_%H%M%S>.csv" - matches that trailing timestamp
+# so the Results tab can order runs by when each was actually started.
+RUN_LOG_TIMESTAMP_RE = re.compile(r"_(\d{8}_\d{6})$")
 
 
 class MainWindow(QMainWindow):
@@ -1704,13 +1710,17 @@ class MainWindow(QMainWindow):
         self.results_loading_label.setVisible(False)
         right_layout.addWidget(self.results_loading_label)
 
+        # Grid cell is deliberately larger than the icon itself (rather than
+        # relying on setSpacing(), which only takes one uniform value) so
+        # the gap between thumbnails can differ horizontally vs vertically -
+        # 1px between columns, 5px between rows.
+        results_icon_size = QSize(220, 220)
         self.results_images_view = QListWidget()
         self.results_images_view.setViewMode(QListWidget.IconMode)
-        self.results_images_view.setIconSize(QSize(220, 220))
-        self.results_images_view.setGridSize(QSize(220, 220))  # fixed, so a blank placeholder icon (see lazy-load) doesn't get cached as the cell size once real thumbnails arrive
+        self.results_images_view.setIconSize(results_icon_size)
+        self.results_images_view.setGridSize(QSize(results_icon_size.width() + 1, results_icon_size.height() + 5))
         self.results_images_view.setResizeMode(QListWidget.Adjust)
         self.results_images_view.setMovement(QListWidget.Static)
-        self.results_images_view.setSpacing(2)
         self.results_images_view.setUniformItemSizes(True)
         self.results_images_view.itemClicked.connect(self._on_results_image_clicked)
         self.results_images_view.itemDoubleClicked.connect(self._on_open_full_image)
@@ -1739,7 +1749,7 @@ class MainWindow(QMainWindow):
         self.results_images_view.clear()
         if not RUNS_DIR.is_dir():
             return
-        log_paths = sorted(RUNS_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        log_paths = sorted(RUNS_DIR.glob("*.csv"), key=self._run_log_sort_key, reverse=True)
         for log_path in log_paths:
             kind, prefixes = self._read_run_log_summary(log_path)
             item = QListWidgetItem(f"{log_path.stem}   ({kind}, {len(prefixes)} queued)")
@@ -1747,6 +1757,23 @@ class MainWindow(QMainWindow):
             self.results_list.addItem(item)
             if previously_selected_log is not None and str(log_path) == previously_selected_log:
                 self.results_list.setCurrentItem(item)
+
+    def _run_log_sort_key(self, log_path):
+        """Sorts by the run's actual start time, embedded in its filename
+        (see RUN_LOG_TIMESTAMP_RE) - falls back to the file's own mtime for
+        anything that doesn't match. Using the embedded start time instead
+        of mtime matters because a run's log is rewritten throughout (see
+        the checkpointing in run_test.py etc.), so mtime reflects whenever
+        it was last written to rather than when the run actually started -
+        those can disagree, e.g. a long-running test that's still going
+        when a later, shorter one both starts and finishes."""
+        match = RUN_LOG_TIMESTAMP_RE.search(log_path.stem)
+        if match:
+            try:
+                return datetime.datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
+            except ValueError:
+                pass
+        return datetime.datetime.fromtimestamp(log_path.stat().st_mtime)
 
     def _read_run_log_summary(self, log_path):
         """(kind, prefixes) for a runs/*.csv log - kind is "Variations Queue"

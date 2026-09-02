@@ -241,7 +241,11 @@ why) - the GUI just makes it faster to build a config and watch it queue.
 ### Results tab
 
 A split view: the left side lists every logged run from
-`funkytown-testing-harness`'s `runs/` folder, newest first - both Model/LoRA
+`funkytown-testing-harness`'s `runs/` folder, ordered by when each run
+actually started (parsed from its log filename's own timestamp, not the
+file's last-modified time - a long-running test's log keeps getting
+rewritten as it goes, so mtime alone can put it out of order relative to a
+shorter run that started later but finished first) - both Model/LoRA
 test runs (`run_test.py`/`lora_test.py`) and Variations runs that were
 queued to ComfyUI (a "Queue Generated Variations" run writes its own log
 there too, alongside the Testing tab's, instead of the single shared
