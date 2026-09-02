@@ -265,7 +265,10 @@ that range - or **Select All** to check every thumbnail at once;
 double-click one to view it full size, with **&lt;**/**&gt;** buttons to step
 through the rest of that run's images without closing the viewer - stepping
 past the last image wraps back to the first, and past the first wraps to
-the last. **Refresh** re-scans the folder and stays on whichever run
+the last. The viewer also shows that image's prompt text underneath, when
+its run's log recorded one - only a multi-prompt Model/LoRA sweep does (a
+single/default-prompt run, or a Variations Queue run, has nothing recorded
+to show, so it says so instead). **Refresh** re-scans the folder and stays on whichever run
 was already selected, just bringing its image grid up to date (also done
 automatically after Run Test or Queue Generated Variations finishes);
 **Delete selected** removes a run's log and its output images after

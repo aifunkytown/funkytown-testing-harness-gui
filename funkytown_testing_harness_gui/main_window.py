@@ -1945,16 +1945,46 @@ class MainWindow(QMainWindow):
 
     def _on_open_full_image(self, item):
         nav_paths = [Path(self.results_images_view.item(i).data(Qt.UserRole)) for i in range(self.results_images_view.count())]
+        current_run = self.results_list.currentItem()
+        log_path = Path(current_run.data(Qt.UserRole)) if current_run is not None else None
         self._show_full_image_dialog(
-            item.data(Qt.UserRole), nav_paths=nav_paths, nav_index=self.results_images_view.row(item)
+            item.data(Qt.UserRole), nav_paths=nav_paths, nav_index=self.results_images_view.row(item), log_path=log_path
         )
 
-    def _show_full_image_dialog(self, path, default_save_dir=None, nav_paths=None, nav_index=None):
+    def _prompt_text_for_image(self, log_path, image_path):
+        """Best-effort prompt text for one output image, matched by its
+        Filename Prefix in the run's log. Only available for a "Test Run"
+        log (run_test.py/lora_test.py) whose sweep had more than one
+        prompt - those are the only case that records a "Prompt" column at
+        all; a single/default-prompt run has nothing to look up, and a
+        "Variations Queue" log (rerun_prompts_comfyui.py) only records its
+        *source* CSV's bare filename (no directory), too fragile to safely
+        re-resolve back to prompt text. Returns None in every case with
+        nothing to show."""
+        if log_path is None:
+            return None
+        try:
+            with open(log_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if "Prompt" not in (reader.fieldnames or []):
+                    return None
+                image_stem = Path(image_path).stem
+                for row in reader:
+                    prefix = row.get("Filename Prefix")
+                    if prefix and image_stem.startswith(Path(prefix).name + "_"):
+                        return (row.get("Prompt") or "").strip() or None
+        except OSError:
+            return None
+        return None
+
+    def _show_full_image_dialog(self, path, default_save_dir=None, nav_paths=None, nav_index=None, log_path=None):
         """nav_paths/nav_index (used when opened from the Results gallery)
         add Previous/Next buttons that step through that same list of
         images in place, wrapping past either end back to the other -
         Next past the last image goes to the first, Previous before the
-        first goes to the last."""
+        first goes to the last. log_path (same source) shows that image's
+        prompt text below it, when the run's log recorded one - see
+        _prompt_text_for_image."""
         path = Path(path)
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
@@ -1981,6 +2011,12 @@ class MainWindow(QMainWindow):
         screen_size = self.screen().availableSize() if self.screen() else QSize(1000, 800)
         max_size = QSize(int(screen_size.width() * 0.85), int(screen_size.height() * 0.85))
 
+        prompt_label = QLabel()
+        prompt_label.setWordWrap(True)
+        prompt_label.setMaximumWidth(max_size.width())
+        prompt_label.setVisible(log_path is not None)
+        layout.addWidget(prompt_label)
+
         if default_save_dir is not None:
             buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Close)
             save_button = buttons.button(QDialogButtonBox.Save)
@@ -1996,6 +2032,9 @@ class MainWindow(QMainWindow):
             current_pixmap = QPixmap(str(current_path))
             if not current_pixmap.isNull():
                 image_label.setPixmap(current_pixmap.scaled(max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            if log_path is not None:
+                prompt_text = self._prompt_text_for_image(log_path, current_path)
+                prompt_label.setText(f"Prompt: {prompt_text}" if prompt_text else "Prompt: (not recorded for this run)")
 
         def navigate(delta):
             state["index"] = (state["index"] + delta) % len(nav_paths)
