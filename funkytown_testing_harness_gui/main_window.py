@@ -1706,7 +1706,8 @@ class MainWindow(QMainWindow):
 
         self.results_images_view = QListWidget()
         self.results_images_view.setViewMode(QListWidget.IconMode)
-        self.results_images_view.setIconSize(QSize(120, 120))
+        self.results_images_view.setIconSize(QSize(220, 220))
+        self.results_images_view.setGridSize(QSize(220, 220))  # fixed, so a blank placeholder icon (see lazy-load) doesn't get cached as the cell size once real thumbnails arrive
         self.results_images_view.setResizeMode(QListWidget.Adjust)
         self.results_images_view.setMovement(QListWidget.Static)
         self.results_images_view.setSpacing(2)
@@ -1807,15 +1808,22 @@ class MainWindow(QMainWindow):
         if not image_paths:
             return
 
+        icon_size = self.results_images_view.iconSize()
+        blank_pixmap = QPixmap(icon_size)
+        blank_pixmap.fill(Qt.transparent)
+        blank_icon = QIcon(blank_pixmap)  # correctly-sized (not empty) placeholder - with
+        # setUniformItemSizes(True), Qt caches the FIRST item's sizeHint and reuses it for
+        # every item's on-screen bounding box, so an empty icon here would cap every real
+        # thumbnail's rendered size to that of an empty icon once _on_thumbnail_ready sets it
         for path in image_paths:
-            item = QListWidgetItem("")  # icon filled in as it loads, see _on_thumbnail_ready
+            item = QListWidgetItem(blank_icon, "")  # real icon filled in as it loads, see _on_thumbnail_ready
             item.setData(Qt.UserRole, str(path))
             item.setData(Qt.UserRole + 1, False)  # checked state - own overlay, not Qt's native checkbox
             item.setToolTip(path.name)
             self.results_images_view.addItem(item)
 
         self.results_loading_label.setVisible(True)
-        loader = ThumbnailLoaderThread(image_paths, self.results_images_view.iconSize(), self)
+        loader = ThumbnailLoaderThread(image_paths, icon_size, self)
         self._thumbnail_loaders.append(loader)  # keep a live reference until it finishes - see thumbnail_loader_thread.py
         loader.thumbnail_ready.connect(self._on_thumbnail_ready)
         loader.finished_loading.connect(lambda loader=loader: self._on_thumbnails_finished(loader))
