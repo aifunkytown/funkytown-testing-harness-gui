@@ -1714,7 +1714,7 @@ class MainWindow(QMainWindow):
         # relying on setSpacing(), which only takes one uniform value) so
         # the gap between thumbnails can differ horizontally vs vertically -
         # 1px between columns, 5px between rows.
-        results_icon_size = QSize(220, 220)
+        results_icon_size = QSize(440, 440)
         self.results_images_view = QListWidget()
         self.results_images_view.setViewMode(QListWidget.IconMode)
         self.results_images_view.setIconSize(results_icon_size)
