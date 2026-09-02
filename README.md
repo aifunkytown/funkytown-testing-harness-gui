@@ -206,7 +206,11 @@ in that file) - aspects the vocab file marks explicit are hidden here by
 default, see Settings > Hide Explicit above - or switch to "Random aspects"
 and pick how many to have
 chosen randomly from the vocab file per row. Set a variation count and
-(optionally) a different Ollama model, then **Generate Variations** - same
+(optionally) a different **Ollama model** - a dropdown populated from
+whatever's currently pulled locally (`ollama list`, via Ollama's own
+`/api/tags`), defaulting to `generate_prompt_variations.DEFAULT_MODEL`; it's
+still editable by hand if Ollama isn't reachable or the model you want isn't
+listed. Then **Generate Variations** - same
 confirm-dialog-then-background-thread flow as the Testing tab's Run Test,
 except the confirm dialog also lists each selected named aspect's full set
 of possible values (for any that have a controlled vocabulary) so you can

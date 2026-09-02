@@ -1079,6 +1079,19 @@ class MainWindow(QMainWindow):
 
     # ---- Variations tab: comfy_prompt_tools.generate_prompt_variations --------
 
+    def _populate_ollama_model_dropdown(self):
+        """Lists locally-pulled Ollama models (via generate_prompt_variations.
+        list_ollama_models(), which just hits Ollama's own /api/tags) so the
+        dropdown reflects whatever's actually installed - falling back to just
+        DEFAULT_MODEL if Ollama isn't reachable or has nothing pulled yet. The
+        combo box stays editable regardless, so a model not in the list can
+        still be typed in by hand."""
+        models = generate_prompt_variations.list_ollama_models()
+        if generate_prompt_variations.DEFAULT_MODEL not in models:
+            models = [generate_prompt_variations.DEFAULT_MODEL] + models
+        self.variations_model_combo.addItems(models)
+        self.variations_model_combo.setCurrentText(generate_prompt_variations.DEFAULT_MODEL)
+
     def _build_variations_tab(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1188,8 +1201,10 @@ class MainWindow(QMainWindow):
         self.variations_count_spin.setValue(5)
         settings_row.addWidget(self.variations_count_spin)
         settings_row.addWidget(QLabel("Ollama model:"))
-        self.variations_model_edit = QLineEdit(generate_prompt_variations.DEFAULT_MODEL)
-        settings_row.addWidget(self.variations_model_edit, 1)
+        self.variations_model_combo = QComboBox()
+        self.variations_model_combo.setEditable(True)  # in case Ollama's unreachable or the wanted model isn't pulled yet
+        self._populate_ollama_model_dropdown()
+        settings_row.addWidget(self.variations_model_combo, 1)
         layout.addLayout(settings_row)
 
         generate_row = QHBoxLayout()
@@ -1456,7 +1471,7 @@ class MainWindow(QMainWindow):
             "csv_path": csv_path,
             "rows": rows,
             "count": self.variations_count_spin.value(),
-            "model": self.variations_model_edit.text().strip() or generate_prompt_variations.DEFAULT_MODEL,
+            "model": self.variations_model_combo.currentText().strip() or generate_prompt_variations.DEFAULT_MODEL,
         }
         if prompt_overrides:
             config["prompt_overrides"] = prompt_overrides
