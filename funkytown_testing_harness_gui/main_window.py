@@ -1427,16 +1427,18 @@ class MainWindow(QMainWindow):
             self._load_prompts_from_csv()
 
     def _on_clear_prompts_csv_clicked(self):
-        """Clears the CSV path and resets Min/Max row back to disabled -
-        the current prompt list itself is left alone (same as if the CSV
-        field were cleared by hand); edit it via Prompts... instead."""
+        """Clears the CSV path, resets Min/Max row back to disabled, and
+        empties the prompt list itself - a full reset back to "no CSV
+        loaded", not just detaching the list from its source."""
         self.prompts_csv_edit.clear()  # -> _on_prompts_csv_changed disables the row spinboxes
         self.prompts_row_min_spin.setRange(1, 1)
         self.prompts_row_min_spin.setValue(1)
         self.prompts_row_max_spin.setRange(1, 1)
         self.prompts_row_max_spin.setValue(1)
+        self._prompts = []
         self._last_loaded_csv_prompts = None
         self.prompts_edited_label.setVisible(False)
+        self._update_prompts_summary_label()
 
     def _write_adhoc_prompt_csv(self, text):
         """Writes a single-row CSV so a manually-typed prompt (no CSV
