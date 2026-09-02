@@ -340,6 +340,10 @@ class MainWindow(QMainWindow):
         browse_prompts_button = QPushButton("Browse...")
         browse_prompts_button.clicked.connect(self._on_browse_prompts_csv)
         prompts_csv_row.addWidget(browse_prompts_button)
+        clear_prompts_csv_button = QPushButton("Clear")
+        clear_prompts_csv_button.setToolTip("Clear the CSV path and Min/Max row - the prompt list itself is left as-is (edit it via Prompts... instead).")
+        clear_prompts_csv_button.clicked.connect(self._on_clear_prompts_csv_clicked)
+        prompts_csv_row.addWidget(clear_prompts_csv_button)
         layout.addLayout(prompts_csv_row)
 
         prompts_row_row = QHBoxLayout()
@@ -1421,6 +1425,18 @@ class MainWindow(QMainWindow):
     def _on_prompts_range_changed(self, _value=None):
         if not getattr(self, "_suppress_prompt_autoload", False):
             self._load_prompts_from_csv()
+
+    def _on_clear_prompts_csv_clicked(self):
+        """Clears the CSV path and resets Min/Max row back to disabled -
+        the current prompt list itself is left alone (same as if the CSV
+        field were cleared by hand); edit it via Prompts... instead."""
+        self.prompts_csv_edit.clear()  # -> _on_prompts_csv_changed disables the row spinboxes
+        self.prompts_row_min_spin.setRange(1, 1)
+        self.prompts_row_min_spin.setValue(1)
+        self.prompts_row_max_spin.setRange(1, 1)
+        self.prompts_row_max_spin.setValue(1)
+        self._last_loaded_csv_prompts = None
+        self.prompts_edited_label.setVisible(False)
 
     def _write_adhoc_prompt_csv(self, text):
         """Writes a single-row CSV so a manually-typed prompt (no CSV
