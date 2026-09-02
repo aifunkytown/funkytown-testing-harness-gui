@@ -8,6 +8,7 @@ their own CLIs do, so behavior is identical either way.
 import csv
 import datetime
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -58,6 +59,7 @@ from funkytown_testing_harness_gui.prompts_dialog import PromptsDialog
 from funkytown_testing_harness_gui.runner_thread import TestRunnerThread
 from funkytown_testing_harness_gui.settings_dialog import SettingsDialog
 from funkytown_testing_harness_gui.theme import apply_theme
+from funkytown_testing_harness_gui.thumbnail_loader_thread import ThumbnailLoaderThread
 from funkytown_testing_harness_gui.variations_prompts_dialog import VariationsPromptsDialog
 
 # Wherever funkytown_testing_harness actually resolved from (default sibling
@@ -78,6 +80,11 @@ GUI_QUEUE_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_queue_variat
 MODELS_TAB_INDEX = 0
 LORA_TAB_INDEX = 1
 
+# run_test.py/lora_test.py/rerun_prompts_comfyui.py all name their log
+# "<name>_<started-at:%Y%m%d_%H%M%S>.csv" - matches that trailing timestamp
+# so the Results tab can order runs by when each was actually started.
+RUN_LOG_TIMESTAMP_RE = re.compile(r"_(\d{8}_\d{6})$")
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -93,6 +100,7 @@ class MainWindow(QMainWindow):
         self._runner_thread = None
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
         self._defaults_thread = None
+        self._thumbnail_loaders = []  # in-flight ThumbnailLoaderThreads - kept alive here until each finishes
         self._last_variations_output_paths = []  # set on each successful Generate Variations run
         self._last_test_config_path = None  # set on each successful Save Test.../Import Test...
 
@@ -1700,12 +1708,21 @@ class MainWindow(QMainWindow):
         self.select_all_images_check.stateChanged.connect(self._on_select_all_images_toggled)
         right_layout.addWidget(self.select_all_images_check)
 
+        self.results_loading_label = QLabel("Loading images...")
+        self.results_loading_label.setVisible(False)
+        right_layout.addWidget(self.results_loading_label)
+
+        # Grid cell is deliberately larger than the icon itself (rather than
+        # relying on setSpacing(), which only takes one uniform value) so
+        # the gap between thumbnails can differ horizontally vs vertically -
+        # 1px between columns, 5px between rows.
+        results_icon_size = QSize(440, 440)
         self.results_images_view = QListWidget()
         self.results_images_view.setViewMode(QListWidget.IconMode)
-        self.results_images_view.setIconSize(QSize(120, 120))
+        self.results_images_view.setIconSize(results_icon_size)
+        self.results_images_view.setGridSize(QSize(results_icon_size.width() + 1, results_icon_size.height() + 5))
         self.results_images_view.setResizeMode(QListWidget.Adjust)
         self.results_images_view.setMovement(QListWidget.Static)
-        self.results_images_view.setSpacing(2)
         self.results_images_view.setUniformItemSizes(True)
         self.results_images_view.itemClicked.connect(self._on_results_image_clicked)
         self.results_images_view.itemDoubleClicked.connect(self._on_open_full_image)
@@ -1734,7 +1751,7 @@ class MainWindow(QMainWindow):
         self.results_images_view.clear()
         if not RUNS_DIR.is_dir():
             return
-        log_paths = sorted(RUNS_DIR.glob("*.csv"), key=lambda p: p.stat().st_mtime, reverse=True)
+        log_paths = sorted(RUNS_DIR.glob("*.csv"), key=self._run_log_sort_key, reverse=True)
         for log_path in log_paths:
             kind, prefixes = self._read_run_log_summary(log_path)
             item = QListWidgetItem(f"{log_path.stem}   ({kind}, {len(prefixes)} queued)")
@@ -1742,6 +1759,23 @@ class MainWindow(QMainWindow):
             self.results_list.addItem(item)
             if previously_selected_log is not None and str(log_path) == previously_selected_log:
                 self.results_list.setCurrentItem(item)
+
+    def _run_log_sort_key(self, log_path):
+        """Sorts by the run's actual start time, embedded in its filename
+        (see RUN_LOG_TIMESTAMP_RE) - falls back to the file's own mtime for
+        anything that doesn't match. Using the embedded start time instead
+        of mtime matters because a run's log is rewritten throughout (see
+        the checkpointing in run_test.py etc.), so mtime reflects whenever
+        it was last written to rather than when the run actually started -
+        those can disagree, e.g. a long-running test that's still going
+        when a later, shorter one both starts and finishes."""
+        match = RUN_LOG_TIMESTAMP_RE.search(log_path.stem)
+        if match:
+            try:
+                return datetime.datetime.strptime(match.group(1), "%Y%m%d_%H%M%S")
+            except ValueError:
+                pass
+        return datetime.datetime.fromtimestamp(log_path.stat().st_mtime)
 
     def _read_run_log_summary(self, log_path):
         """(kind, prefixes) for a runs/*.csv log - kind is "Variations Queue"
@@ -1793,31 +1827,67 @@ class MainWindow(QMainWindow):
         self.select_all_images_check.setChecked(False)
         self._suppress_select_all_toggle = False
         self.create_grid_button.setEnabled(current is not None)
+        self.results_loading_label.setVisible(False)
         if current is None:
             return
         if not self.settings.get("comfyui_install_dir"):
             return
         log_path = Path(current.data(Qt.UserRole))
+        image_paths = self._resolve_run_images(log_path)
+        if not image_paths:
+            return
+
         icon_size = self.results_images_view.iconSize()
-        for path in self._resolve_run_images(log_path):
-            icon = self._make_thumbnail_icon(path, icon_size, checked=False)
-            if icon is None:
-                continue
-            item = QListWidgetItem(icon, "")
+        blank_pixmap = QPixmap(icon_size)
+        blank_pixmap.fill(Qt.transparent)
+        blank_icon = QIcon(blank_pixmap)  # correctly-sized (not empty) placeholder - with
+        # setUniformItemSizes(True), Qt caches the FIRST item's sizeHint and reuses it for
+        # every item's on-screen bounding box, so an empty icon here would cap every real
+        # thumbnail's rendered size to that of an empty icon once _on_thumbnail_ready sets it
+        for path in image_paths:
+            item = QListWidgetItem(blank_icon, "")  # real icon filled in as it loads, see _on_thumbnail_ready
             item.setData(Qt.UserRole, str(path))
             item.setData(Qt.UserRole + 1, False)  # checked state - own overlay, not Qt's native checkbox
             item.setToolTip(path.name)
             self.results_images_view.addItem(item)
 
+        self.results_loading_label.setVisible(True)
+        loader = ThumbnailLoaderThread(image_paths, icon_size, self)
+        self._thumbnail_loaders.append(loader)  # keep a live reference until it finishes - see thumbnail_loader_thread.py
+        loader.thumbnail_ready.connect(self._on_thumbnail_ready)
+        loader.finished_loading.connect(lambda loader=loader: self._on_thumbnails_finished(loader))
+        loader.start()
+
+    def _on_thumbnail_ready(self, index, path_str, image):
+        """A previous selection's loader can still be delivering results
+        after the gallery's been cleared and rebuilt for a new one - guard
+        by checking the item at this index still points at the same path
+        before touching it, rather than trying to cancel the old thread."""
+        if index >= self.results_images_view.count():
+            return
+        item = self.results_images_view.item(index)
+        if item.data(Qt.UserRole) != path_str or image.isNull():
+            return
+        item.setIcon(self._compose_thumbnail_icon(QPixmap.fromImage(image), self.results_images_view.iconSize(), checked=False))
+
+    def _on_thumbnails_finished(self, loader):
+        if loader in self._thumbnail_loaders:
+            self._thumbnail_loaders.remove(loader)
+        if not self._thumbnail_loaders:
+            self.results_loading_label.setVisible(False)
+
     def _make_thumbnail_icon(self, path, icon_size, checked):
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return None
+        return self._compose_thumbnail_icon(pixmap, icon_size, checked)
+
+    def _compose_thumbnail_icon(self, pixmap, icon_size, checked):
         """A thumbnail icon with a green checkmark badge composited onto its
         bottom-left corner when checked - Qt's native item checkbox always
         renders to the left of the icon and can't be repositioned without a
         custom item delegate, so this bakes the indicator into the icon
         pixmap itself instead."""
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            return None
         scaled = pixmap.scaled(icon_size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         canvas = QPixmap(icon_size)
         canvas.fill(Qt.transparent)
@@ -1876,31 +1946,111 @@ class MainWindow(QMainWindow):
                 item.setIcon(icon)
 
     def _on_open_full_image(self, item):
-        self._show_full_image_dialog(item.data(Qt.UserRole))
+        nav_paths = [Path(self.results_images_view.item(i).data(Qt.UserRole)) for i in range(self.results_images_view.count())]
+        current_run = self.results_list.currentItem()
+        log_path = Path(current_run.data(Qt.UserRole)) if current_run is not None else None
+        self._show_full_image_dialog(
+            item.data(Qt.UserRole), nav_paths=nav_paths, nav_index=self.results_images_view.row(item), log_path=log_path
+        )
 
-    def _show_full_image_dialog(self, path, default_save_dir=None):
+    def _prompt_text_for_image(self, log_path, image_path):
+        """Best-effort prompt text for one output image, matched by its
+        Filename Prefix in the run's log. Only available for a "Test Run"
+        log (run_test.py/lora_test.py) whose sweep had more than one
+        prompt - those are the only case that records a "Prompt" column at
+        all; a single/default-prompt run has nothing to look up, and a
+        "Variations Queue" log (rerun_prompts_comfyui.py) only records its
+        *source* CSV's bare filename (no directory), too fragile to safely
+        re-resolve back to prompt text. Returns None in every case with
+        nothing to show."""
+        if log_path is None:
+            return None
+        try:
+            with open(log_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                if "Prompt" not in (reader.fieldnames or []):
+                    return None
+                image_stem = Path(image_path).stem
+                for row in reader:
+                    prefix = row.get("Filename Prefix")
+                    if prefix and image_stem.startswith(Path(prefix).name + "_"):
+                        return (row.get("Prompt") or "").strip() or None
+        except OSError:
+            return None
+        return None
+
+    def _show_full_image_dialog(self, path, default_save_dir=None, nav_paths=None, nav_index=None, log_path=None):
+        """nav_paths/nav_index (used when opened from the Results gallery)
+        add Previous/Next buttons that step through that same list of
+        images in place, wrapping past either end back to the other -
+        Next past the last image goes to the first, Previous before the
+        first goes to the last. log_path (same source) shows that image's
+        prompt text below it, when the run's log recorded one - see
+        _prompt_text_for_image."""
         path = Path(path)
         pixmap = QPixmap(str(path))
         if pixmap.isNull():
             return
+        if not nav_paths:
+            nav_paths = [path]
+            nav_index = 0
+        state = {"index": nav_index}
+
         dialog = QDialog(self)
-        dialog.setWindowTitle(path.name)
         layout = QVBoxLayout(dialog)
-        label = QLabel()
+
+        image_row = QHBoxLayout()
+        prev_button = QPushButton("<")
+        prev_button.setFixedWidth(32)
+        image_label = QLabel()
+        next_button = QPushButton(">")
+        next_button.setFixedWidth(32)
+        image_row.addWidget(prev_button)
+        image_row.addWidget(image_label, 1)
+        image_row.addWidget(next_button)
+        layout.addLayout(image_row)
+
         screen_size = self.screen().availableSize() if self.screen() else QSize(1000, 800)
         max_size = QSize(int(screen_size.width() * 0.85), int(screen_size.height() * 0.85))
-        label.setPixmap(pixmap.scaled(max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-        layout.addWidget(label)
+
+        prompt_label = QLabel()
+        prompt_label.setWordWrap(True)
+        prompt_label.setMaximumWidth(max_size.width())
+        prompt_label.setVisible(log_path is not None)
+        layout.addWidget(prompt_label)
 
         if default_save_dir is not None:
             buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Close)
-            buttons.button(QDialogButtonBox.Save).clicked.connect(
-                lambda: self._on_save_image_clicked(path, default_save_dir)
-            )
+            save_button = buttons.button(QDialogButtonBox.Save)
         else:
             buttons = QDialogButtonBox(QDialogButtonBox.Close)
+            save_button = None
         buttons.rejected.connect(dialog.close)
         layout.addWidget(buttons)
+
+        def show_current():
+            current_path = nav_paths[state["index"]]
+            dialog.setWindowTitle(current_path.name)
+            current_pixmap = QPixmap(str(current_path))
+            if not current_pixmap.isNull():
+                image_label.setPixmap(current_pixmap.scaled(max_size, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            if log_path is not None:
+                prompt_text = self._prompt_text_for_image(log_path, current_path)
+                prompt_label.setText(f"Prompt: {prompt_text}" if prompt_text else "Prompt: (not recorded for this run)")
+
+        def navigate(delta):
+            state["index"] = (state["index"] + delta) % len(nav_paths)
+            show_current()
+
+        show_nav = len(nav_paths) > 1
+        prev_button.setVisible(show_nav)
+        next_button.setVisible(show_nav)
+        prev_button.clicked.connect(lambda: navigate(-1))
+        next_button.clicked.connect(lambda: navigate(1))
+        if save_button is not None:
+            save_button.clicked.connect(lambda: self._on_save_image_clicked(nav_paths[state["index"]], default_save_dir))
+
+        show_current()
         dialog.exec()
 
     def _on_save_image_clicked(self, path, default_save_dir):

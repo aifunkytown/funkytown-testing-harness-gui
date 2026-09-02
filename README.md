@@ -240,7 +240,11 @@ why) - the GUI just makes it faster to build a config and watch it queue.
 ### Results tab
 
 A split view: the left side lists every logged run from
-`funkytown-testing-harness`'s `runs/` folder, newest first - both Model/LoRA
+`funkytown-testing-harness`'s `runs/` folder, ordered by when each run
+actually started (parsed from its log filename's own timestamp, not the
+file's last-modified time - a long-running test's log keeps getting
+rewritten as it goes, so mtime alone can put it out of order relative to a
+shorter run that started later but finished first) - both Model/LoRA
 test runs (`run_test.py`/`lora_test.py`) and Variations runs that were
 queued to ComfyUI (a "Queue Generated Variations" run writes its own log
 there too, alongside the Testing tab's, instead of the single shared
@@ -249,12 +253,21 @@ invocation - so each queue run gets its own permanent entry here). Each
 entry shows how many prompts it queued. Nothing is selected by default -
 the right side stays blank until you click a run, which then fills it with
 a tightly-packed, checkable grid of thumbnails for its output images -
-never the OS file browser. Click a thumbnail to check/uncheck it (shown as
-a green checkmark badge over its bottom-left corner) - Shift+click checks
-every thumbnail between it and the last one you plain-clicked, Windows-
-Explorer-style, without touching anything outside that range - or
-**Select All** to check every thumbnail at once; double-click one to view
-it full size. **Refresh** re-scans the folder and stays on whichever run
+never the OS file browser. Thumbnails load in the background ("Loading
+images..." shows while it's in progress) so selecting a run with a lot of
+output doesn't freeze the window - each one appears as its own file finishes
+loading rather than the whole grid popping in at once. Click a thumbnail to
+check/uncheck it (shown as a green checkmark badge over its bottom-left
+corner) - Shift+click checks every thumbnail between it and the last one you
+plain-clicked, Windows-Explorer-style, without touching anything outside
+that range - or **Select All** to check every thumbnail at once;
+double-click one to view it full size, with **&lt;**/**&gt;** buttons to step
+through the rest of that run's images without closing the viewer - stepping
+past the last image wraps back to the first, and past the first wraps to
+the last. The viewer also shows that image's prompt text underneath, when
+its run's log recorded one - only a multi-prompt Model/LoRA sweep does (a
+single/default-prompt run, or a Variations Queue run, has nothing recorded
+to show, so it says so instead). **Refresh** re-scans the folder and stays on whichever run
 was already selected, just bringing its image grid up to date (also done
 automatically after Run Test or Queue Generated Variations finishes);
 **Delete selected** removes a run's log and its output images after
