@@ -94,10 +94,9 @@ previous runs' output images).
   prompts can be freely removed via the popup (never writes back to the
   source CSV) - a red **edited** label appears next to Max row whenever the
   list no longer matches a fresh pull of the current CSV/row range. **Clear**
-  next to Browse resets the CSV path and Min/Max row back to disabled -
-  the prompt list itself is left as-is, so a CSV-loaded list can be detached
-  from its source and hand-edited without it auto-reloading. The
-  **Use Default LoRAs**
+  next to Browse resets the CSV path, Min/Max row, and the prompt list
+  itself back to empty - a full reset, not just detaching the list from
+  its source. The **Use Default LoRAs**
   checkbox only applies on the Model tab (it's
   disabled on the LoRA tab, since a LoRA run needs those slots to stay present) -
   unchecked by default, meaning this run's queued workflow gets its Power
