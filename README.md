@@ -250,8 +250,13 @@ queued to ComfyUI (a "Queue Generated Variations" run writes its own log
 there too, alongside the Testing tab's, instead of the single shared
 `rerun_log.csv` `rerun_prompts_comfyui.py` normally overwrites on every
 invocation - so each queue run gets its own permanent entry here). Each
-entry shows how many prompts it queued. Nothing is selected by default -
-the right side stays blank until you click a run, which then fills it with
+entry shows how many prompts it queued, with its own checkbox (unchecked by
+default) plus a **Select All** above the list for bulk actions - currently
+just **Delete selected** below, which now deletes every checked run's log
+and output images in one confirmation instead of one at a time. Checking a
+run is independent of *viewing* it: nothing is shown by default - the right
+side stays blank until you click a run (regardless of its checkbox), which
+fills it with
 a tightly-packed, checkable grid of thumbnails for its output images -
 never the OS file browser. Thumbnails load in the background ("Loading
 images..." shows while it's in progress) so selecting a run with a lot of
@@ -275,8 +280,7 @@ single/default-prompt run, or a Variations Queue run, has nothing recorded
 to show, so it says so instead). **Refresh** re-scans the folder and stays on whichever run
 was already selected, just bringing its image grid up to date (also done
 automatically after Run Test or Queue Generated Variations finishes);
-**Delete selected** removes a run's log and its output images after
-confirming (cannot be undone); **Create Grid** builds a labeled
+**Create Grid** builds a labeled
 side-by-side comparison image from whichever images are currently checked
 (at least 2 required) - one column per model/LoRA combo, up to 10 per
 image; checking more than that produces additional numbered files (each
