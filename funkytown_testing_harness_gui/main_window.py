@@ -1670,6 +1670,11 @@ class MainWindow(QMainWindow):
         left = QWidget()
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.select_all_runs_check = QCheckBox("Select All")
+        self.select_all_runs_check.stateChanged.connect(self._on_select_all_runs_toggled)
+        left_layout.addWidget(self.select_all_runs_check)
+
         self.results_list = QListWidget()
         # NoFocus stops Qt from auto-selecting row 0 the moment the list
         # becomes visible (its normal behavior for a focusable, populated
@@ -1677,6 +1682,7 @@ class MainWindow(QMainWindow):
         # clicks a run. Mouse clicks still select items fine either way.
         self.results_list.setFocusPolicy(Qt.NoFocus)
         self.results_list.currentItemChanged.connect(self._on_results_selection_changed)
+        self.results_list.itemChanged.connect(self._on_results_run_item_changed)
         left_layout.addWidget(self.results_list, 1)
 
         buttons_row = QHBoxLayout()
@@ -1684,7 +1690,7 @@ class MainWindow(QMainWindow):
         refresh_button.clicked.connect(self._refresh_results_list)
         buttons_row.addWidget(refresh_button)
         delete_button = QPushButton("Delete selected")
-        delete_button.setToolTip("Deletes this run's log and its output images. Cannot be undone.")
+        delete_button.setToolTip("Deletes the checked run(s)' logs and their output images. Cannot be undone.")
         delete_button.clicked.connect(self._on_delete_selected_result)
         buttons_row.addWidget(delete_button)
         self.create_grid_button = QPushButton("Create Grid")
@@ -1747,6 +1753,10 @@ class MainWindow(QMainWindow):
         previously_selected = self.results_list.currentItem()
         previously_selected_log = previously_selected.data(Qt.UserRole) if previously_selected else None
 
+        self._suppress_select_all_runs_toggle = True
+        self.select_all_runs_check.setChecked(False)  # every run starts unchecked after a refresh
+        self._suppress_select_all_runs_toggle = False
+
         self.results_list.clear()
         self.results_images_view.clear()
         if not RUNS_DIR.is_dir():
@@ -1756,9 +1766,41 @@ class MainWindow(QMainWindow):
             kind, prefixes = self._read_run_log_summary(log_path)
             item = QListWidgetItem(f"{log_path.stem}   ({kind}, {len(prefixes)} queued)")
             item.setData(Qt.UserRole, str(log_path))
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
+            item.setCheckState(Qt.Unchecked)
             self.results_list.addItem(item)
             if previously_selected_log is not None and str(log_path) == previously_selected_log:
                 self.results_list.setCurrentItem(item)
+
+    def _on_select_all_runs_toggled(self, _state):
+        if getattr(self, "_suppress_select_all_runs_toggle", False):
+            return
+        check_state = Qt.Checked if self.select_all_runs_check.isChecked() else Qt.Unchecked
+        self._suppress_run_item_changed = True
+        for i in range(self.results_list.count()):
+            self.results_list.item(i).setCheckState(check_state)
+        self._suppress_run_item_changed = False
+
+    def _on_results_run_item_changed(self, _item):
+        """Keeps Select All in sync with the individual run checkboxes -
+        checked only once every run in the list is checked, same pattern
+        as the image gallery's own Select All."""
+        if getattr(self, "_suppress_run_item_changed", False):
+            return
+        count = self.results_list.count()
+        all_checked = count > 0 and all(
+            self.results_list.item(i).checkState() == Qt.Checked for i in range(count)
+        )
+        self._suppress_select_all_runs_toggle = True
+        self.select_all_runs_check.setChecked(all_checked)
+        self._suppress_select_all_runs_toggle = False
+
+    def _checked_results_runs(self):
+        return [
+            Path(self.results_list.item(i).data(Qt.UserRole))
+            for i in range(self.results_list.count())
+            if self.results_list.item(i).checkState() == Qt.Checked
+        ]
 
     def _run_log_sort_key(self, log_path):
         """Sorts by the run's actual start time, embedded in its filename
@@ -2119,27 +2161,36 @@ class MainWindow(QMainWindow):
             self._show_full_image_dialog(path, default_save_dir=images_dir)
 
     def _on_delete_selected_result(self):
-        item = self.results_list.currentItem()
-        if item is None:
+        log_paths = self._checked_results_runs()
+        if not log_paths:
             return
-        log_path = Path(item.data(Qt.UserRole))
-        images = self._resolve_run_images(log_path) if self.settings.get("comfyui_install_dir") else []
+        images_by_run = {
+            log_path: self._resolve_run_images(log_path) if self.settings.get("comfyui_install_dir") else []
+            for log_path in log_paths
+        }
+        total_images = sum(len(images) for images in images_by_run.values())
 
-        message = f"Delete this run's log ({log_path.name})"
-        if images:
-            message += f" and its {len(images)} output image(s)"
+        if len(log_paths) == 1:
+            message = f"Delete this run's log ({log_paths[0].name})"
+            if total_images:
+                message += f" and its {total_images} output image(s)"
+        else:
+            message = f"Delete these {len(log_paths)} runs' logs"
+            if total_images:
+                message += f" and their {total_images} output image(s) total"
         message += "?\n\nThis cannot be undone."
-        if QMessageBox.question(self, "Delete run", message) != QMessageBox.Yes:
+        if QMessageBox.question(self, "Delete run(s)", message) != QMessageBox.Yes:
             return
 
-        for image_path in images:
+        for log_path, images in images_by_run.items():
+            for image_path in images:
+                try:
+                    image_path.unlink()
+                except OSError as e:
+                    self._log(f"Warning: could not delete {image_path}: {e}")
             try:
-                image_path.unlink()
+                log_path.unlink()
             except OSError as e:
-                self._log(f"Warning: could not delete {image_path}: {e}")
-        try:
-            log_path.unlink()
-        except OSError as e:
-            self._log(f"Warning: could not delete {log_path}: {e}")
+                self._log(f"Warning: could not delete {log_path}: {e}")
 
         self._refresh_results_list()
