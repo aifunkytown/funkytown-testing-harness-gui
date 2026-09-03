@@ -78,6 +78,7 @@ GUI_LORA_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_lora_run.json"
 GUI_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_variations_run.json"
 GUI_QUEUE_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_queue_variations_run.json"
 GUI_GENERATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_generations_run.json"
+GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_generations_clean_csv_run.json"
 
 MODELS_TAB_INDEX = 0
 LORA_TAB_INDEX = 1
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         self._thumbnail_loaders = []  # in-flight ThumbnailLoaderThreads - kept alive here until each finishes
         self._generations_thumbnail_loaders = []  # same, for the Generations tab's own gallery
         self._generations_thread = None
+        self._generations_pending_results_source = ("directory", "")  # set right before each generations run - see _start_generations_thread
         self._last_variations_output_paths = []  # set on each successful Generate Variations run
         self._last_test_config_path = None  # set on each successful Save Test.../Import Test...
 
@@ -2317,6 +2319,37 @@ class MainWindow(QMainWindow):
         buttons_row.addWidget(self.generations_queue_button)
         left_layout.addLayout(buttons_row)
 
+        left_layout.addWidget(QLabel("<b>Clean existing CSV(s)</b> - skips extraction, cleans/rates whatever's already in them:"))
+
+        csv_row = QHBoxLayout()
+        self.generations_csv_list = QListWidget()
+        self.generations_csv_list.setMaximumHeight(90)
+        csv_row.addWidget(self.generations_csv_list, 1)
+        csv_buttons_col = QVBoxLayout()
+        csv_browse_button = QPushButton("Browse...")
+        csv_browse_button.clicked.connect(self._on_browse_generations_csvs)
+        csv_buttons_col.addWidget(csv_browse_button)
+        csv_clear_button = QPushButton("Clear")
+        csv_clear_button.clicked.connect(self._on_clear_generations_csvs)
+        csv_buttons_col.addWidget(csv_clear_button)
+        csv_row.addLayout(csv_buttons_col)
+        left_layout.addLayout(csv_row)
+
+        csv_actions_row = QHBoxLayout()
+        self.generations_clean_csv_button = QPushButton("Clean Selected CSV(s)")
+        self.generations_clean_csv_button.setToolTip(
+            "Rewrites and content-rates each selected CSV's prompts via Ollama - no extraction, no ComfyUI."
+        )
+        self.generations_clean_csv_button.clicked.connect(self._on_generations_clean_csvs_clicked)
+        csv_actions_row.addWidget(self.generations_clean_csv_button)
+        self.generations_clean_queue_csv_button = QPushButton("Clean + Queue Selected CSV(s)")
+        self.generations_clean_queue_csv_button.setToolTip(
+            "Same as Clean, then submits each cleaned prompt to ComfyUI using the workflow selected on the Testing tab."
+        )
+        self.generations_clean_queue_csv_button.clicked.connect(self._on_generations_clean_queue_csvs_clicked)
+        csv_actions_row.addWidget(self.generations_clean_queue_csv_button)
+        left_layout.addLayout(csv_actions_row)
+
         self.generations_log_view = QPlainTextEdit()
         self.generations_log_view.setReadOnly(True)
         self.generations_log_view.setMaximumBlockCount(5000)
@@ -2435,11 +2468,38 @@ class MainWindow(QMainWindow):
             if p.is_file() and p.suffix.lower() in extract_image_prompts.IMAGE_EXTENSIONS
         )
 
+    def _images_from_csvs(self, csv_paths):
+        """Every distinct, still-existing image referenced by these CSVs'
+        own File Path column - used to preview what a Clean CSV(s) action
+        is about to touch, same idea as _resolve_generations_images for a
+        directory scan."""
+        seen = set()
+        images = []
+        for csv_path in csv_paths:
+            try:
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        file_path = (row.get("File Path") or "").strip()
+                        if not file_path:
+                            continue
+                        found = Path(file_path)
+                        if found.is_file() and found not in seen:
+                            seen.add(found)
+                            images.append(found)
+            except OSError:
+                continue
+        images.sort()
+        return images
+
     def _refresh_generations_gallery(self):
-        self.generations_images_view.clear()
-        self.generations_loading_label.setVisible(False)
         directory = self.generations_dir_edit.text().strip()
         image_paths = self._resolve_generations_images(directory) if directory else []
+        self._populate_generations_gallery(image_paths)
+
+    def _populate_generations_gallery(self, image_paths):
+        self.generations_images_view.clear()
+        self.generations_loading_label.setVisible(False)
         if not image_paths:
             return
 
@@ -2494,8 +2554,14 @@ class MainWindow(QMainWindow):
         self.generations_extract_button.setEnabled(enabled)
         self.generations_clean_button.setEnabled(enabled)
         self.generations_queue_button.setEnabled(enabled)
+        self.generations_clean_csv_button.setEnabled(enabled)
+        self.generations_clean_queue_csv_button.setEnabled(enabled)
 
-    def _start_generations_thread(self, run_func, arg):
+    def _start_generations_thread(self, run_func, arg, results_source):
+        """results_source is ("directory", directory) or ("csvs", csv_paths)
+        - which one determines how _on_generations_finished_ok resolves the
+        gallery refresh and the Results-tab log afterward."""
+        self._generations_pending_results_source = results_source
         self._set_generations_buttons_enabled(False)
         self.generations_log_view.clear()
         self._generations_thread = TestRunnerThread(run_func, arg, self)
@@ -2511,7 +2577,7 @@ class MainWindow(QMainWindow):
         directory = self._generations_directory_or_warn()
         if directory is None:
             return
-        self._start_generations_thread(extract_image_prompts.extract_all, directory)
+        self._start_generations_thread(extract_image_prompts.extract_all, directory, ("directory", directory))
 
     def _on_generations_extract_clean_rate_clicked(self):
         directory = self._generations_directory_or_warn()
@@ -2521,32 +2587,25 @@ class MainWindow(QMainWindow):
             "directory": directory,
             "model": self.generations_model_combo.currentText().strip() or CLEAN_PROMPTS_DEFAULT_MODEL,
             "overwrite": self.generations_overwrite_check.isChecked(),
+            "verbose": True,  # keep File Path etc. - the Results tab log needs it, see _write_generations_results_log_from_csvs
         }
         GUI_GENERATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH)
+        self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH, ("directory", directory))
 
     def _on_generations_extract_clean_rate_queue_clicked(self):
         directory = self._generations_directory_or_warn()
         if directory is None:
             return
 
-        workflow_name = self.workflow_combo.currentText().strip()
-        if not workflow_name:
-            QMessageBox.warning(self, "No workflow selected", "Pick a source workflow on the Testing tab first.")
-            return
-        comfyui_install_dir = self.settings.get("comfyui_install_dir")
-        if not comfyui_install_dir:
-            QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
-            return
-        workflow_path = Path(comfyui_install_dir) / "user" / "default" / "workflows" / workflow_name
-        if not workflow_path.is_file():
-            QMessageBox.warning(self, "Workflow not found", f"File not found:\n{workflow_path}")
+        workflow_path = self._generations_selected_workflow_or_warn()
+        if workflow_path is None:
             return
 
         config = {
             "directory": directory,
             "model": self.generations_model_combo.currentText().strip() or CLEAN_PROMPTS_DEFAULT_MODEL,
             "overwrite": self.generations_overwrite_check.isChecked(),
+            "verbose": True,  # keep File Path etc. - the Results tab log needs it, see _write_generations_results_log_from_csvs
             "submit_to_comfyui": True,
             "workflow": str(workflow_path),
             "server": self.settings["server"],
@@ -2557,20 +2616,113 @@ class MainWindow(QMainWindow):
         ):
             return
         GUI_GENERATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
-        self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH)
+        self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH, ("directory", directory))
+
+    def _generations_selected_workflow_or_warn(self):
+        """Resolves the Testing tab's currently-selected workflow to a
+        local file path, same validation as Queue Generated Variations -
+        shared by both the directory Queue button and the CSV Clean+Queue
+        button below."""
+        workflow_name = self.workflow_combo.currentText().strip()
+        if not workflow_name:
+            QMessageBox.warning(self, "No workflow selected", "Pick a source workflow on the Testing tab first.")
+            return None
+        comfyui_install_dir = self.settings.get("comfyui_install_dir")
+        if not comfyui_install_dir:
+            QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
+            return None
+        workflow_path = Path(comfyui_install_dir) / "user" / "default" / "workflows" / workflow_name
+        if not workflow_path.is_file():
+            QMessageBox.warning(self, "Workflow not found", f"File not found:\n{workflow_path}")
+            return None
+        return workflow_path
+
+    def _generations_selected_csv_paths(self):
+        return [self.generations_csv_list.item(i).text() for i in range(self.generations_csv_list.count())]
+
+    def _on_browse_generations_csvs(self):
+        paths, _ = QFileDialog.getOpenFileNames(
+            self, "Choose CSV file(s) to clean", self._csv_browse_default_dir(), "CSV files (*.csv)"
+        )
+        if not paths:
+            return
+        self.generations_csv_list.clear()
+        self.generations_csv_list.addItems(paths)
+        self._populate_generations_gallery(self._images_from_csvs(paths))
+
+    def _on_clear_generations_csvs(self):
+        self.generations_csv_list.clear()
+        self._populate_generations_gallery([])
+
+    def _generations_csv_paths_or_warn(self):
+        csv_paths = self._generations_selected_csv_paths()
+        if not csv_paths:
+            QMessageBox.warning(self, "No CSVs selected", "Choose one or more CSV files to clean first.")
+            return None
+        return csv_paths
+
+    def _on_generations_clean_csvs_clicked(self):
+        csv_paths = self._generations_csv_paths_or_warn()
+        if csv_paths is None:
+            return
+        config = {
+            "csv_paths": csv_paths,
+            "model": self.generations_model_combo.currentText().strip() or CLEAN_PROMPTS_DEFAULT_MODEL,
+            "overwrite": self.generations_overwrite_check.isChecked(),
+            "verbose": True,  # keep File Path etc. - the Results tab log needs it, see _write_generations_results_log_from_csvs
+        }
+        GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._start_generations_thread(clean_prompts.run, GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH, ("csvs", csv_paths))
+
+    def _on_generations_clean_queue_csvs_clicked(self):
+        csv_paths = self._generations_csv_paths_or_warn()
+        if csv_paths is None:
+            return
+        workflow_path = self._generations_selected_workflow_or_warn()
+        if workflow_path is None:
+            return
+
+        config = {
+            "csv_paths": csv_paths,
+            "model": self.generations_model_combo.currentText().strip() or CLEAN_PROMPTS_DEFAULT_MODEL,
+            "overwrite": self.generations_overwrite_check.isChecked(),
+            "verbose": True,  # keep File Path etc. - the Results tab log needs it, see _write_generations_results_log_from_csvs
+            "submit_to_comfyui": True,
+            "workflow": str(workflow_path),
+            "server": self.settings["server"],
+        }
+        if not self._confirm_json(
+            "Confirm queue job", config, "About to clean and queue these CSV(s) to ComfyUI:", "Queue",
+        ):
+            return
+        GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._start_generations_thread(clean_prompts.run, GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH, ("csvs", csv_paths))
 
     def _on_generations_finished_ok(self):
         self._set_generations_buttons_enabled(True)
         self.generations_log_view.appendPlainText("Done.")
-        self._refresh_generations_gallery()
-        self._write_generations_results_log(self.generations_dir_edit.text().strip())
+        source_kind, source_value = self._generations_pending_results_source
+        if source_kind == "directory":
+            self._refresh_generations_gallery()
+            self._write_generations_results_log_from_directory(source_value)
+        else:
+            self._populate_generations_gallery(self._images_from_csvs(source_value))
+            self._write_generations_results_log_from_csvs(source_value, log_name="cleaned_csvs")
 
     def _on_generations_finished_error(self, message):
         self._set_generations_buttons_enabled(True)
         self.generations_log_view.appendPlainText(f"Failed: {message}")
         QMessageBox.critical(self, "Generations failed", message)
 
-    def _write_generations_results_log(self, directory):
+    def _write_generations_results_log_from_directory(self, directory):
+        if not directory:
+            return
+        csv_paths = sorted(Path(directory).rglob("*-prompts.csv"))
+        if not csv_paths:
+            return
+        self._write_generations_results_log_from_csvs(csv_paths, log_name=Path(directory).name or "generations")
+
+    def _write_generations_results_log_from_csvs(self, csv_paths, log_name="generations"):
         """After a Generations run finishes, writes a log into
         funkytown-testing-harness's runs/ folder (same folder run_test.py/
         lora_test.py/rerun_prompts_comfyui.py write to) so it shows up in
@@ -2578,9 +2730,6 @@ class MainWindow(QMainWindow):
         pipeline never renders anything - the images already exist - so
         each row's own File Path is recorded directly instead of a
         Filename Prefix to glob for a future render."""
-        if not directory:
-            return
-        csv_paths = sorted(Path(directory).rglob("*-prompts.csv"))
         if not csv_paths:
             return
 
@@ -2604,8 +2753,7 @@ class MainWindow(QMainWindow):
             return
 
         RUNS_DIR.mkdir(exist_ok=True)
-        name = Path(directory).name or "generations"
-        log_path = RUNS_DIR / f"{name}_{datetime.datetime.now():%y%m%d_%H%M%S}.csv"
+        log_path = RUNS_DIR / f"{log_name}_{datetime.datetime.now():%y%m%d_%H%M%S}.csv"
         with open(log_path, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(f, fieldnames=fieldnames)
             writer.writeheader()

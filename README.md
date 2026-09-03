@@ -218,15 +218,28 @@ Save writes both files and takes effect immediately in the running app,
 no restart needed - same pattern as **Edit LoRA Rules...** on the Testing
 tab.
 
-Any of the three buttons runs in the background, streaming progress into
+**Clean existing CSV(s)** below skips extraction entirely, for a CSV (or
+several) you already have: **Browse...** picks one or more files at once
+(the preview gallery fills with every image any of them reference, via
+their own File Path column), **Clear** empties the selection. **Clean
+Selected CSV(s)** rewrites and content-rates them in place, same Ollama
+call as above; **Clean + Queue Selected CSV(s)** also submits the result
+to ComfyUI, same workflow/confirmation as Extract + Clean + Rate + Queue.
+Ollama model and Overwrite above are shared with the directory buttons.
+
+Any of the five buttons runs in the background, streaming progress into
 the collapsible **Log** below; the preview gallery refreshes once it
 finishes (the images themselves don't change, just their CSV metadata, but
-this confirms the run completed against the same directory). A run also
-writes its own log into `funkytown-testing-harness`'s `runs/` folder, so
-it shows up in the **Results** tab too, browsable the same way as a Model/
-LoRA test run - except its images already existed going in (nothing was
-rendered by *this* pipeline), so they're resolved directly by the path
-each row already recorded rather than a filename pattern to search for.
+this confirms the run completed). Every Clean/Queue action here always
+saves its CSV with every column kept (`--verbose`, regardless of the
+`clean_prompts.py` CLI's own trimmed-by-default behavior) - the Results
+tab integration below depends on File Path surviving, and trimming would
+silently break it. A run also writes its own log into
+`funkytown-testing-harness`'s `runs/` folder, so it shows up in the
+**Results** tab too, browsable the same way as a Model/LoRA test run -
+except its images already existed going in (nothing was rendered by
+*this* pipeline), so they're resolved directly by the path each row
+already recorded rather than a filename pattern to search for.
 
 ### Variations tab
 

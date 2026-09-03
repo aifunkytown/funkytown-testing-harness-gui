@@ -17,6 +17,7 @@ gui_last_lora_run.json
 gui_last_variations_run.json
 gui_last_queue_variations_run.json
 gui_last_generations_run.json
+gui_last_generations_clean_csv_run.json
 
 # Editor/OS cruft
 .vscode/
