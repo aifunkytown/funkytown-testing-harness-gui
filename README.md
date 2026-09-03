@@ -256,15 +256,20 @@ a tightly-packed, checkable grid of thumbnails for its output images -
 never the OS file browser. Thumbnails load in the background ("Loading
 images..." shows while it's in progress) so selecting a run with a lot of
 output doesn't freeze the window - each one appears as its own file finishes
-loading rather than the whole grid popping in at once. Click a thumbnail to
-check/uncheck it (shown as a green checkmark badge over its bottom-left
-corner) - Shift+click checks every thumbnail between it and the last one you
+loading rather than the whole grid popping in at once. Every thumbnail
+starts checked (so Create Grid below works immediately without having to
+select anything first) - click one to uncheck/recheck it individually
+(shown as a green checkmark badge over its bottom-left corner) -
+Shift+click toggles-on every thumbnail between it and the last one you
 plain-clicked, Windows-Explorer-style, without touching anything outside
-that range - or **Select All** to check every thumbnail at once;
+that range - or **Select All** to check/uncheck every thumbnail at once;
 double-click one to view it full size, with **&lt;**/**&gt;** buttons to step
 through the rest of that run's images without closing the viewer - stepping
 past the last image wraps back to the first, and past the first wraps to
-the last. The viewer also shows that image's prompt text underneath, when
+the last - and a **Save & Close** button that saves a copy elsewhere
+(defaulting to the same folder the run's own images live in) and closes the
+viewer once the save actually completes; cancelling the save dialog leaves
+the viewer open. The viewer also shows that image's prompt text underneath, when
 its run's log recorded one - only a multi-prompt Model/LoRA sweep does (a
 single/default-prompt run, or a Variations Queue run, has nothing recorded
 to show, so it says so instead). **Refresh** re-scans the folder and stays on whichever run

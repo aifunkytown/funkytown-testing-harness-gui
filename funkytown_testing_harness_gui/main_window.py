@@ -1824,7 +1824,7 @@ class MainWindow(QMainWindow):
         self.results_images_view.clear()
         self._results_gallery_anchor_row = None  # stale row indices once the gallery's rebuilt
         self._suppress_select_all_toggle = True
-        self.select_all_images_check.setChecked(False)
+        self.select_all_images_check.setChecked(True)  # every image starts checked - see the per-item flag below
         self._suppress_select_all_toggle = False
         self.create_grid_button.setEnabled(current is not None)
         self.results_loading_label.setVisible(False)
@@ -1847,7 +1847,7 @@ class MainWindow(QMainWindow):
         for path in image_paths:
             item = QListWidgetItem(blank_icon, "")  # real icon filled in as it loads, see _on_thumbnail_ready
             item.setData(Qt.UserRole, str(path))
-            item.setData(Qt.UserRole + 1, False)  # checked state - own overlay, not Qt's native checkbox
+            item.setData(Qt.UserRole + 1, True)  # checked by default - own overlay, not Qt's native checkbox
             item.setToolTip(path.name)
             self.results_images_view.addItem(item)
 
@@ -1868,7 +1868,8 @@ class MainWindow(QMainWindow):
         item = self.results_images_view.item(index)
         if item.data(Qt.UserRole) != path_str or image.isNull():
             return
-        item.setIcon(self._compose_thumbnail_icon(QPixmap.fromImage(image), self.results_images_view.iconSize(), checked=False))
+        checked = bool(item.data(Qt.UserRole + 1))
+        item.setIcon(self._compose_thumbnail_icon(QPixmap.fromImage(image), self.results_images_view.iconSize(), checked=checked))
 
     def _on_thumbnails_finished(self, loader):
         if loader in self._thumbnail_loaders:
@@ -1950,7 +1951,8 @@ class MainWindow(QMainWindow):
         current_run = self.results_list.currentItem()
         log_path = Path(current_run.data(Qt.UserRole)) if current_run is not None else None
         self._show_full_image_dialog(
-            item.data(Qt.UserRole), nav_paths=nav_paths, nav_index=self.results_images_view.row(item), log_path=log_path
+            item.data(Qt.UserRole), nav_paths=nav_paths, nav_index=self.results_images_view.row(item),
+            log_path=log_path, default_save_dir=Path(item.data(Qt.UserRole)).parent,
         )
 
     def _prompt_text_for_image(self, log_path, image_path):
@@ -2019,12 +2021,10 @@ class MainWindow(QMainWindow):
         prompt_label.setVisible(log_path is not None)
         layout.addWidget(prompt_label)
 
+        buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        save_close_button = None
         if default_save_dir is not None:
-            buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Close)
-            save_button = buttons.button(QDialogButtonBox.Save)
-        else:
-            buttons = QDialogButtonBox(QDialogButtonBox.Close)
-            save_button = None
+            save_close_button = buttons.addButton("Save && Close", QDialogButtonBox.ActionRole)
         buttons.rejected.connect(dialog.close)
         layout.addWidget(buttons)
 
@@ -2047,25 +2047,33 @@ class MainWindow(QMainWindow):
         next_button.setVisible(show_nav)
         prev_button.clicked.connect(lambda: navigate(-1))
         next_button.clicked.connect(lambda: navigate(1))
-        if save_button is not None:
-            save_button.clicked.connect(lambda: self._on_save_image_clicked(nav_paths[state["index"]], default_save_dir))
+        if save_close_button is not None:
+            def save_and_close():
+                if self._on_save_image_clicked(nav_paths[state["index"]], default_save_dir):
+                    dialog.close()
+            save_close_button.clicked.connect(save_and_close)
 
         show_current()
         dialog.exec()
 
     def _on_save_image_clicked(self, path, default_save_dir):
+        """Returns True once the image is actually saved, False if the save
+        dialog was cancelled or the copy itself failed - the modal's Save &
+        Close button only closes on True, so a cancel or a failure leaves it
+        open instead of losing your place."""
         default_path = Path(default_save_dir) / path.name
         chosen_path, _ = QFileDialog.getSaveFileName(
             self, "Save image", str(default_path), "PNG files (*.png)"
         )
         if not chosen_path:
-            return
+            return False
         try:
             shutil.copyfile(path, chosen_path)
         except OSError as e:
             QMessageBox.critical(self, "Save failed", str(e))
-            return
+            return False
         self._log(f"Saved {path.name} to {chosen_path}")
+        return True
 
     def _checked_result_images(self):
         return [
