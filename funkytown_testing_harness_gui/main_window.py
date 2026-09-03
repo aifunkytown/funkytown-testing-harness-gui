@@ -48,7 +48,8 @@ from PySide6.QtWidgets import (
 from funkytown_testing_harness import comparison_grid
 from funkytown_testing_harness.lora_test import run as run_lora_test
 from funkytown_testing_harness.run_test import run as run_model_test
-from comfy_prompt_tools import generate_prompt_variations, rerun_prompts_comfyui
+from comfy_prompt_tools import extract_and_clean, extract_image_prompts, generate_prompt_variations, rerun_prompts_comfyui
+from comfy_prompt_tools.clean_prompts import MODEL as CLEAN_PROMPTS_DEFAULT_MODEL
 from comfy_prompt_tools.local_config import load_named_list, local_path_for
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
@@ -76,6 +77,7 @@ GUI_MODEL_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_model_run.json"
 GUI_LORA_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_lora_run.json"
 GUI_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_variations_run.json"
 GUI_QUEUE_VARIATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_queue_variations_run.json"
+GUI_GENERATIONS_RUN_CONFIG_PATH = GUI_PROJECT_ROOT / "gui_last_generations_run.json"
 
 MODELS_TAB_INDEX = 0
 LORA_TAB_INDEX = 1
@@ -101,6 +103,8 @@ class MainWindow(QMainWindow):
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
         self._defaults_thread = None
         self._thumbnail_loaders = []  # in-flight ThumbnailLoaderThreads - kept alive here until each finishes
+        self._generations_thumbnail_loaders = []  # same, for the Generations tab's own gallery
+        self._generations_thread = None
         self._last_variations_output_paths = []  # set on each successful Generate Variations run
         self._last_test_config_path = None  # set on each successful Save Test.../Import Test...
 
@@ -114,6 +118,7 @@ class MainWindow(QMainWindow):
         self.outer_tabs.addTab(self._build_testing_tab(), "Testing")
         self.outer_tabs.addTab(self._build_variations_tab(), "Variations")
         self.outer_tabs.addTab(self._build_results_tab(), "Results")
+        self.outer_tabs.addTab(self._build_generations_tab(), "Generations")
         root.addWidget(self.outer_tabs, 1)
 
         self._refresh_workflow_list()
@@ -2192,5 +2197,194 @@ class MainWindow(QMainWindow):
                 log_path.unlink()
             except OSError as e:
                 self._log(f"Warning: could not delete {log_path}: {e}")
+
+    # ---- Generations tab: extract/clean/rate a directory of images ------------
+
+    def _build_generations_tab(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+
+        layout.addWidget(QLabel(
+            "Scans a directory of images (comfy_prompt_tools.extract_and_clean), "
+            "reads each one's embedded generation metadata, rewrites the prompt "
+            "for a modern text-to-image model, and content-rates it - all via a "
+            "local Ollama model. An image with no metadata at all is described "
+            "directly instead of being skipped."
+        ))
+
+        splitter = QSplitter(Qt.Horizontal)
+
+        left = QWidget()
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(QLabel("Directory:"))
+        self.generations_dir_edit = QLineEdit()
+        dir_row.addWidget(self.generations_dir_edit, 1)
+        browse_button = QPushButton("Browse...")
+        browse_button.clicked.connect(self._on_browse_generations_dir)
+        dir_row.addWidget(browse_button)
+        left_layout.addLayout(dir_row)
+
+        options_row = QHBoxLayout()
+        options_row.addWidget(QLabel("Ollama model:"))
+        self.generations_model_combo = QComboBox()
+        self.generations_model_combo.setEditable(True)  # in case Ollama's unreachable or the wanted model isn't pulled yet
+        self._populate_generations_model_dropdown()
+        options_row.addWidget(self.generations_model_combo, 1)
+        self.generations_overwrite_check = QCheckBox("Overwrite")
+        self.generations_overwrite_check.setToolTip(
+            "Reprocess rows that already have a Cleaned Prompt (default: skip them)."
+        )
+        options_row.addWidget(self.generations_overwrite_check)
+        left_layout.addLayout(options_row)
+
+        self.generations_queue_button = QPushButton("Queue for Extraction/Cleaning/Rating")
+        self.generations_queue_button.clicked.connect(self._on_queue_generations_clicked)
+        left_layout.addWidget(self.generations_queue_button)
+
+        self.generations_log_view = QPlainTextEdit()
+        self.generations_log_view.setReadOnly(True)
+        self.generations_log_view.setMaximumBlockCount(5000)
+        self._add_collapsible_log(page, left_layout, self.generations_log_view)
+
+        splitter.addWidget(left)
+
+        right = QWidget()
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.generations_loading_label = QLabel("Loading images...")
+        self.generations_loading_label.setVisible(False)
+        right_layout.addWidget(self.generations_loading_label)
+
+        generations_icon_size = QSize(440, 440)
+        self.generations_images_view = QListWidget()
+        self.generations_images_view.setViewMode(QListWidget.IconMode)
+        self.generations_images_view.setIconSize(generations_icon_size)
+        self.generations_images_view.setGridSize(
+            QSize(generations_icon_size.width() + 1, generations_icon_size.height() + 5)
+        )
+        self.generations_images_view.setResizeMode(QListWidget.Adjust)
+        self.generations_images_view.setMovement(QListWidget.Static)
+        self.generations_images_view.setUniformItemSizes(True)
+        self.generations_images_view.itemDoubleClicked.connect(self._on_generations_image_double_clicked)
+        right_layout.addWidget(self.generations_images_view, 1)
+        splitter.addWidget(right)
+
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([450, 900])
+        layout.addWidget(splitter, 1)
+
+        self.generations_dir_edit.textChanged.connect(lambda _text: self._refresh_generations_gallery())
+
+        return page
+
+    def _on_browse_generations_dir(self):
+        chosen = QFileDialog.getExistingDirectory(
+            self, "Choose directory to scan", self.generations_dir_edit.text() or self._csv_browse_default_dir()
+        )
+        if chosen:
+            self.generations_dir_edit.setText(chosen)
+
+    def _populate_generations_model_dropdown(self):
+        """Same idea as _populate_ollama_model_dropdown (Variations tab), but
+        defaulting to clean_prompts.MODEL instead of generate_prompt_
+        variations.DEFAULT_MODEL - each script has its own default model."""
+        models = generate_prompt_variations.list_ollama_models()
+        if CLEAN_PROMPTS_DEFAULT_MODEL not in models:
+            models = [CLEAN_PROMPTS_DEFAULT_MODEL] + models
+        self.generations_model_combo.addItems(models)
+        self.generations_model_combo.setCurrentText(CLEAN_PROMPTS_DEFAULT_MODEL)
+
+    def _resolve_generations_images(self, directory):
+        root = Path(directory)
+        if not root.is_dir():
+            return []
+        return sorted(
+            p for p in root.rglob("*")
+            if p.is_file() and p.suffix.lower() in extract_image_prompts.IMAGE_EXTENSIONS
+        )
+
+    def _refresh_generations_gallery(self):
+        self.generations_images_view.clear()
+        self.generations_loading_label.setVisible(False)
+        directory = self.generations_dir_edit.text().strip()
+        image_paths = self._resolve_generations_images(directory) if directory else []
+        if not image_paths:
+            return
+
+        icon_size = self.generations_images_view.iconSize()
+        blank_pixmap = QPixmap(icon_size)
+        blank_pixmap.fill(Qt.transparent)
+        blank_icon = QIcon(blank_pixmap)  # see thumbnail_loader_thread.py / Results tab for why not an empty icon
+        for path in image_paths:
+            item = QListWidgetItem(blank_icon, "")
+            item.setData(Qt.UserRole, str(path))
+            item.setToolTip(path.name)
+            self.generations_images_view.addItem(item)
+
+        self.generations_loading_label.setVisible(True)
+        loader = ThumbnailLoaderThread(image_paths, icon_size, self)
+        self._generations_thumbnail_loaders.append(loader)
+        loader.thumbnail_ready.connect(self._on_generations_thumbnail_ready)
+        loader.finished_loading.connect(lambda loader=loader: self._on_generations_thumbnails_finished(loader))
+        loader.start()
+
+    def _on_generations_thumbnail_ready(self, index, path_str, image):
+        if index >= self.generations_images_view.count():
+            return
+        item = self.generations_images_view.item(index)
+        if item.data(Qt.UserRole) != path_str or image.isNull():
+            return
+        item.setIcon(self._compose_thumbnail_icon(QPixmap.fromImage(image), self.generations_images_view.iconSize(), checked=False))
+
+    def _on_generations_thumbnails_finished(self, loader):
+        if loader in self._generations_thumbnail_loaders:
+            self._generations_thumbnail_loaders.remove(loader)
+        if not self._generations_thumbnail_loaders:
+            self.generations_loading_label.setVisible(False)
+
+    def _on_generations_image_double_clicked(self, item):
+        nav_paths = [
+            Path(self.generations_images_view.item(i).data(Qt.UserRole))
+            for i in range(self.generations_images_view.count())
+        ]
+        self._show_full_image_dialog(
+            item.data(Qt.UserRole), nav_paths=nav_paths, nav_index=self.generations_images_view.row(item)
+        )
+
+    def _on_queue_generations_clicked(self):
+        directory = self.generations_dir_edit.text().strip()
+        if not directory or not Path(directory).is_dir():
+            QMessageBox.warning(self, "No directory", "Choose a valid directory to scan first.")
+            return
+
+        config = {
+            "directory": directory,
+            "model": self.generations_model_combo.currentText().strip() or CLEAN_PROMPTS_DEFAULT_MODEL,
+            "overwrite": self.generations_overwrite_check.isChecked(),
+        }
+        GUI_GENERATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+
+        self.generations_queue_button.setEnabled(False)
+        self.generations_log_view.clear()
+        self._generations_thread = TestRunnerThread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH, self)
+        self._generations_thread.log_line.connect(self.generations_log_view.appendPlainText)
+        self._generations_thread.finished_ok.connect(self._on_generations_finished_ok)
+        self._generations_thread.finished_error.connect(self._on_generations_finished_error)
+        self._generations_thread.start()
+
+    def _on_generations_finished_ok(self):
+        self.generations_queue_button.setEnabled(True)
+        self.generations_log_view.appendPlainText("Done.")
+        self._refresh_generations_gallery()
+
+    def _on_generations_finished_error(self, message):
+        self.generations_queue_button.setEnabled(True)
+        self.generations_log_view.appendPlainText(f"Failed: {message}")
+        QMessageBox.critical(self, "Generations failed", message)
 
         self._refresh_results_list()

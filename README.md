@@ -61,10 +61,11 @@ project root - see "Launcher exe" below.
 
 ## What it does
 
-The window has three top-level tabs: **Testing** (build and run a
+The window has four top-level tabs: **Testing** (build and run a
 model-comparison or LoRA-weight-sweep config), **Variations** (generate
-prompt variations for one CSV row via Ollama), and **Results** (browse
-previous runs' output images).
+prompt variations for one CSV row via Ollama), **Results** (browse
+previous runs' output images), and **Generations** (extract, clean, and
+content-rate a whole directory of images via Ollama).
 
 - **First-run setup** - until a ComfyUI installation folder is configured,
   startup tries to infer one from a running ComfyUI server's own launch
@@ -296,13 +297,35 @@ fewer images than it'll end up with. Requires the ComfyUI installation
 folder to be set in Settings (same setting the Workflow selector uses).
 
 Each `run_test.py`/`lora_test.py` run writes its images under their own
-`tests/<name>/<run_id>/...` directory (`run_id` a short random id, fresh
-per run) rather than everyone sharing `tests/<name>/...`, so two runs with
-the same name never comingle their images - this is what makes a precise
-per-run image snapshot possible at all. Each image's filename also starts
-with a zero-padded queue number, so sorting by name (including in the
-thumbnail grid here) always matches the order things were actually queued
-in, regardless of how model/LoRA names alphabetize.
+`tests/<name>/<run_id>/...` directory (`run_id` a shortened timestamp of
+when the run started, fresh per run) rather than everyone sharing
+`tests/<name>/...`, so two runs with the same name never comingle their
+images - this is what makes a precise per-run image snapshot possible at
+all. Each image's filename also starts with a zero-padded queue number, so
+sorting by name (including in the thumbnail grid here) always matches the
+order things were actually queued in, regardless of how model/LoRA names
+alphabetize.
+
+### Generations tab
+
+Scans a directory of images (`comfy_prompt_tools.extract_and_clean`) and
+runs the full extract -> clean -> rate pipeline on it: each image's
+embedded generation metadata is read, its prompt is rewritten for a modern
+text-to-image model, and content-rated - all via a local Ollama model, in
+one call per image (see `comfy-prompt-tools`'s `clean_prompts.py`). An
+image with no metadata at all is described directly from the image itself
+instead of being skipped. **Directory** plus **Browse...** choose what to
+scan (recursively, same as `extract_image_prompts.py`) - the right side
+fills with a lazy-loaded preview grid of every image found there, same
+loading behavior as the Results tab's gallery; double-click one to view it
+full size, with the same **&lt;**/**&gt;** step-through navigation. **Ollama
+model** defaults to `clean_prompts.py`'s own default (independent of the
+Variations tab's model choice); **Overwrite** reprocesses rows that already
+have a Cleaned Prompt instead of skipping them. **Queue for Extraction/
+Cleaning/Rating** runs the pipeline in the background, streaming progress
+into the collapsible **Log** below - the preview gallery refreshes once it
+finishes (the images themselves don't change, just their CSV metadata, but
+this confirms the run completed against the same directory).
 
 ## Launcher exe
 
