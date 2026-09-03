@@ -219,13 +219,25 @@ no restart needed - same pattern as **Edit LoRA Rules...** on the Testing
 tab.
 
 **Clean existing CSV(s)** below skips extraction entirely, for a CSV (or
-several) you already have: **Browse...** picks one or more files at once
-(the preview gallery fills with every image any of them reference, via
-their own File Path column), **Clear** empties the selection. **Clean
-Selected CSV(s)** rewrites and content-rates them in place, same Ollama
-call as above; **Clean + Queue Selected CSV(s)** also submits the result
-to ComfyUI, same workflow/confirmation as Extract + Clean + Rate + Queue.
-Ollama model and Overwrite above are shared with the directory buttons.
+several) you already have: **Browse...** picks one or more files, adding
+them to the list of already-selected CSVs rather than replacing it - click
+Browse again to pick more without losing what's already there; the preview
+gallery fills with every image any of the listed CSVs reference, via their
+own File Path column. **Clear** empties the selection. **Prompts...**
+opens a popup listing every row's raw Positive Prompt text across all
+selected CSVs (never Cleaned Prompt, even if one's already there - this is
+what `clean_prompts.py` is about to read, not what it may have already
+produced) - edit a row's text inline or click its **✕** to drop that row
+from cleaning entirely; **Save (overrides CSV files)** asks for
+confirmation (naming exactly how many rows will be edited/removed across
+how many files) before writing the changes back to the source CSV file(s)
+in place - a hard-to-reverse action, so nothing is written until that
+confirmation is accepted, and Cancel at either the popup or the
+confirmation makes no changes at all. **Clean Selected CSV(s)** rewrites
+and content-rates them in place, same Ollama call as above; **Clean +
+Queue Selected CSV(s)** also submits the result to ComfyUI, same
+workflow/confirmation as Extract + Clean + Rate + Queue. Ollama model and
+Overwrite above are shared with the directory buttons.
 
 Any of the five buttons runs in the background, streaming progress into
 the collapsible **Log** below; the preview gallery refreshes once it

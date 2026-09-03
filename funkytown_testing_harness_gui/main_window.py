@@ -8,6 +8,7 @@ their own CLIs do, so behavior is identical either way.
 import csv
 import datetime
 import json
+import os
 import re
 import shutil
 from pathlib import Path
@@ -54,6 +55,7 @@ from comfy_prompt_tools.local_config import load_named_list, local_path_for
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
+from funkytown_testing_harness_gui.generations_csv_prompts_dialog import GenerationsCsvPromptsDialog
 from funkytown_testing_harness_gui.lora_weights_dialog import LoraWeightsDialog
 from funkytown_testing_harness_gui.model_config_dialog import ModelConfigDialog
 from funkytown_testing_harness_gui.prompts_dialog import PromptsDialog
@@ -2267,15 +2269,6 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left)
         left_layout.setContentsMargins(0, 0, 0, 0)
 
-        dir_row = QHBoxLayout()
-        dir_row.addWidget(QLabel("Directory:"))
-        self.generations_dir_edit = QLineEdit()
-        dir_row.addWidget(self.generations_dir_edit, 1)
-        browse_button = QPushButton("Browse...")
-        browse_button.clicked.connect(self._on_browse_generations_dir)
-        dir_row.addWidget(browse_button)
-        left_layout.addLayout(dir_row)
-
         options_row = QHBoxLayout()
         options_row.addWidget(QLabel("Ollama model:"))
         self.generations_model_combo = QComboBox()
@@ -2296,6 +2289,20 @@ class MainWindow(QMainWindow):
         edit_cleaning_prompt_button.clicked.connect(self._edit_cleaning_prompt)
         options_row.addWidget(edit_cleaning_prompt_button)
         left_layout.addLayout(options_row)
+        # Shared by both sections below - Ollama model / Overwrite apply to
+        # whichever button is actually clicked.
+
+        directory_group = QGroupBox("Directory")
+        directory_layout = QVBoxLayout(directory_group)
+
+        dir_row = QHBoxLayout()
+        dir_row.addWidget(QLabel("Directory:"))
+        self.generations_dir_edit = QLineEdit()
+        dir_row.addWidget(self.generations_dir_edit, 1)
+        browse_button = QPushButton("Browse...")
+        browse_button.clicked.connect(self._on_browse_generations_dir)
+        dir_row.addWidget(browse_button)
+        directory_layout.addLayout(dir_row)
 
         buttons_row = QHBoxLayout()
         self.generations_extract_button = QPushButton("Extract")
@@ -2317,13 +2324,17 @@ class MainWindow(QMainWindow):
         )
         self.generations_queue_button.clicked.connect(self._on_generations_extract_clean_rate_queue_clicked)
         buttons_row.addWidget(self.generations_queue_button)
-        left_layout.addLayout(buttons_row)
+        directory_layout.addLayout(buttons_row)
 
-        left_layout.addWidget(QLabel("<b>Clean existing CSV(s)</b> - skips extraction, cleans/rates whatever's already in them:"))
+        left_layout.addWidget(directory_group)
+
+        csv_group = QGroupBox("Clean Existing CSV(s)")
+        csv_group.setToolTip("Skips extraction - cleans/rates whatever's already in the chosen CSV(s).")
+        csv_group_layout = QVBoxLayout(csv_group)
 
         csv_row = QHBoxLayout()
         self.generations_csv_list = QListWidget()
-        self.generations_csv_list.setMaximumHeight(90)
+        self.generations_csv_list.setFixedHeight(90)  # QListWidget defaults to an expanding vertical size policy - setMaximumHeight alone doesn't stop it claiming leftover layout space
         csv_row.addWidget(self.generations_csv_list, 1)
         csv_buttons_col = QVBoxLayout()
         csv_browse_button = QPushButton("Browse...")
@@ -2332,8 +2343,15 @@ class MainWindow(QMainWindow):
         csv_clear_button = QPushButton("Clear")
         csv_clear_button.clicked.connect(self._on_clear_generations_csvs)
         csv_buttons_col.addWidget(csv_clear_button)
+        csv_prompts_button = QPushButton("Prompts...")
+        csv_prompts_button.setToolTip(
+            "View/edit the raw Positive Prompt text across every loaded CSV before cleaning - "
+            "never shows Cleaned Prompt. Saving overrides the source CSV file(s)."
+        )
+        csv_prompts_button.clicked.connect(self._on_generations_edit_csv_prompts)
+        csv_buttons_col.addWidget(csv_prompts_button)
         csv_row.addLayout(csv_buttons_col)
-        left_layout.addLayout(csv_row)
+        csv_group_layout.addLayout(csv_row)
 
         csv_actions_row = QHBoxLayout()
         self.generations_clean_csv_button = QPushButton("Clean Selected CSV(s)")
@@ -2348,12 +2366,24 @@ class MainWindow(QMainWindow):
         )
         self.generations_clean_queue_csv_button.clicked.connect(self._on_generations_clean_queue_csvs_clicked)
         csv_actions_row.addWidget(self.generations_clean_queue_csv_button)
-        left_layout.addLayout(csv_actions_row)
+        csv_group_layout.addLayout(csv_actions_row)
+
+        left_layout.addWidget(csv_group)
 
         self.generations_log_view = QPlainTextEdit()
         self.generations_log_view.setReadOnly(True)
         self.generations_log_view.setMaximumBlockCount(5000)
         self._add_collapsible_log(page, left_layout, self.generations_log_view)
+
+        # Keeps the two group boxes (and the collapsed log toggle) packed at
+        # the top instead of spread out to fill the splitter pane's full
+        # height. The log itself already has stretch factor 1 from
+        # _add_collapsible_log - heavily outweighting this trailing spacer's
+        # own share (100:1) means the log still claims nearly all leftover
+        # space once expanded, while this spacer is what keeps things tight
+        # while it's collapsed.
+        left_layout.addStretch(1)
+        left_layout.setStretchFactor(self.generations_log_view, 100)
 
         splitter.addWidget(left)
 
@@ -2641,14 +2671,20 @@ class MainWindow(QMainWindow):
         return [self.generations_csv_list.item(i).text() for i in range(self.generations_csv_list.count())]
 
     def _on_browse_generations_csvs(self):
+        """Adds to the current selection rather than replacing it, so
+        picking CSVs across more than one Browse click accumulates
+        instead of the later pick wiping out the earlier one."""
         paths, _ = QFileDialog.getOpenFileNames(
             self, "Choose CSV file(s) to clean", self._csv_browse_default_dir(), "CSV files (*.csv)"
         )
         if not paths:
             return
-        self.generations_csv_list.clear()
-        self.generations_csv_list.addItems(paths)
-        self._populate_generations_gallery(self._images_from_csvs(paths))
+        existing = set(self._generations_selected_csv_paths())
+        for path in paths:
+            if path not in existing:
+                self.generations_csv_list.addItem(path)
+                existing.add(path)
+        self._populate_generations_gallery(self._images_from_csvs(self._generations_selected_csv_paths()))
 
     def _on_clear_generations_csvs(self):
         self.generations_csv_list.clear()
@@ -2660,6 +2696,92 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "No CSVs selected", "Choose one or more CSV files to clean first.")
             return None
         return csv_paths
+
+    def _generations_raw_prompts_from_csvs(self, csv_paths):
+        """[(csv_path, row_index, positive_prompt_text), ...] for every row
+        across these CSVs with non-empty Positive Prompt text - row_index
+        is 0-based into that CSV's data rows (header excluded), used to
+        write edits/removals back to the correct row on Save. Never looks
+        at Cleaned Prompt - this previews/edits what clean_prompts.py is
+        about to read, not what it may have already produced."""
+        prompts = []
+        for csv_path in csv_paths:
+            try:
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for i, row in enumerate(reader):
+                        text = (row.get("Positive Prompt") or "").strip()
+                        if text:
+                            prompts.append((csv_path, i, text))
+            except OSError:
+                continue
+        return prompts
+
+    def _on_generations_edit_csv_prompts(self):
+        csv_paths = self._generations_csv_paths_or_warn()
+        if csv_paths is None:
+            return
+        prompts = self._generations_raw_prompts_from_csvs(csv_paths)
+        if not prompts:
+            QMessageBox.information(
+                self, "No prompts found", "None of the selected CSV(s) have a non-empty Positive Prompt column."
+            )
+            return
+
+        dialog = GenerationsCsvPromptsDialog(prompts, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        edits, removals = dialog.edits_and_removals(prompts)
+        if not edits and not removals:
+            return  # nothing actually changed
+
+        changed_files = {path for path, _row in edits} | set(removals.keys())
+        removed_count = sum(len(rows) for rows in removals.values())
+        message = f"About to permanently modify {len(changed_files)} CSV file(s):\n"
+        if edits:
+            message += f"- {len(edits)} row(s) with edited Positive Prompt text\n"
+        if removals:
+            message += f"- {removed_count} row(s) removed entirely\n"
+        message += "\nThis cannot be undone. Continue?"
+        if QMessageBox.question(self, "Override CSV file(s)", message) != QMessageBox.Yes:
+            return
+
+        self._apply_generations_csv_prompt_changes(csv_paths, edits, removals)
+        self.generations_log_view.appendPlainText(
+            f"Prompts: updated {len(edits)} row(s), removed {removed_count} row(s) across {len(changed_files)} CSV file(s)."
+        )
+        self._populate_generations_gallery(self._images_from_csvs(self._generations_selected_csv_paths()))
+
+    def _apply_generations_csv_prompt_changes(self, csv_paths, edits, removals):
+        """Rewrites each affected CSV in place: an edited row gets its
+        Positive Prompt column replaced; a removed row is dropped
+        entirely. A CSV with neither is left completely untouched."""
+        for csv_path in csv_paths:
+            removed_indices = removals.get(csv_path, set())
+            path_edits = {row_index: text for (path, row_index), text in edits.items() if path == csv_path}
+            if not removed_indices and not path_edits:
+                continue
+
+            with open(csv_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                fieldnames = list(reader.fieldnames or [])
+                rows = list(reader)
+
+            new_rows = []
+            for i, row in enumerate(rows):
+                if i in removed_indices:
+                    continue
+                if i in path_edits:
+                    row["Positive Prompt"] = path_edits[i]
+                new_rows.append(row)
+
+            tmp_path = csv_path + ".tmp"
+            with open(tmp_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
+                writer.writeheader()
+                writer.writerows(new_rows)
+            os.replace(tmp_path, csv_path)
 
     def _on_generations_clean_csvs_clicked(self):
         csv_paths = self._generations_csv_paths_or_warn()
