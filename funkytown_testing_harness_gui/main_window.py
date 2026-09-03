@@ -48,7 +48,7 @@ from PySide6.QtWidgets import (
 from funkytown_testing_harness import comparison_grid
 from funkytown_testing_harness.lora_test import run as run_lora_test
 from funkytown_testing_harness.run_test import run as run_model_test
-from comfy_prompt_tools import extract_and_clean, extract_image_prompts, generate_prompt_variations, rerun_prompts_comfyui
+from comfy_prompt_tools import clean_prompts, extract_and_clean, extract_image_prompts, generate_prompt_variations, rerun_prompts_comfyui
 from comfy_prompt_tools.clean_prompts import MODEL as CLEAN_PROMPTS_DEFAULT_MODEL
 from comfy_prompt_tools.local_config import load_named_list, local_path_for
 from funkytown_testing_harness_gui import comfy_client
@@ -116,9 +116,9 @@ class MainWindow(QMainWindow):
 
         self.outer_tabs = QTabWidget()
         self.outer_tabs.addTab(self._build_testing_tab(), "Testing")
+        self.outer_tabs.addTab(self._build_generations_tab(), "Generations")
         self.outer_tabs.addTab(self._build_variations_tab(), "Variations")
         self.outer_tabs.addTab(self._build_results_tab(), "Results")
-        self.outer_tabs.addTab(self._build_generations_tab(), "Generations")
         root.addWidget(self.outer_tabs, 1)
 
         self._refresh_workflow_list()
@@ -1768,8 +1768,9 @@ class MainWindow(QMainWindow):
             return
         log_paths = sorted(RUNS_DIR.glob("*.csv"), key=self._run_log_sort_key, reverse=True)
         for log_path in log_paths:
-            kind, prefixes = self._read_run_log_summary(log_path)
-            item = QListWidgetItem(f"{log_path.stem}   ({kind}, {len(prefixes)} queued)")
+            kind, count = self._read_run_log_summary(log_path)
+            noun = "image(s)" if kind == "Generations" else "queued"
+            item = QListWidgetItem(f"{log_path.stem}   ({kind}, {count} {noun})")
             item.setData(Qt.UserRole, str(log_path))
             item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
             item.setCheckState(Qt.Unchecked)
@@ -1825,34 +1826,65 @@ class MainWindow(QMainWindow):
         return datetime.datetime.fromtimestamp(log_path.stat().st_mtime)
 
     def _read_run_log_summary(self, log_path):
-        """(kind, prefixes) for a runs/*.csv log - kind is "Variations Queue"
-        for a rerun_prompts_comfyui.py-style log (detected by its "CSV File"
-        column) or "Test Run" for a run_test.py/lora_test.py-style one;
-        prefixes is every non-empty "Filename Prefix" value (skipped/error
-        rows log an empty one, so they're naturally excluded)."""
+        """(kind, count) for a runs/*.csv log - kind is "Variations Queue"
+        for a rerun_prompts_comfyui.py-style log (its own "CSV File"
+        column), "Generations" for a Generations-tab log (its own "File
+        Path" column with no "Filename Prefix" - images already exist,
+        nothing was queued to ComfyUI), or "Test Run" for a run_test.py/
+        lora_test.py-style one. count is however many rows actually
+        represent something real (skipped/error rows log an empty value
+        and are naturally excluded)."""
         try:
             with open(log_path, newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
                 fieldnames = reader.fieldnames or []
                 rows = list(reader)
         except OSError:
-            return "Unknown", []
-        kind = "Variations Queue" if "CSV File" in fieldnames else "Test Run"
-        prefixes = [r["Filename Prefix"] for r in rows if r.get("Filename Prefix")]
-        return kind, prefixes
+            return "Unknown", 0
+
+        if "CSV File" in fieldnames:
+            return "Variations Queue", sum(1 for r in rows if r.get("Filename Prefix"))
+        if "File Path" in fieldnames and "Filename Prefix" not in fieldnames:
+            return "Generations", sum(1 for r in rows if r.get("File Path"))
+        return "Test Run", sum(1 for r in rows if r.get("Filename Prefix"))
 
     def _resolve_run_images(self, log_path):
         """Snapshot of whatever image files currently exist on disk for a
-        logged run - reads each row's Filename Prefix and globs
-        "<prefix>_*" under ComfyUI's output folder (ComfyUI appends its own
-        numeric counter and extension to filename_prefix). No polling
-        ComfyUI - just whatever's there right now, so a still-in-progress
-        run simply shows fewer images than it'll end up with."""
+        logged run. A Generations-tab log (see _write_generations_results_
+        log) lists each row's own File Path directly - those images
+        already exist, nothing was rendered. Everything else (run_test.py/
+        lora_test.py/rerun_prompts_comfyui.py) globs "<prefix>_*" under
+        ComfyUI's output folder instead (ComfyUI appends its own numeric
+        counter and extension to filename_prefix) - no polling ComfyUI,
+        just whatever's there right now, so a still-in-progress run simply
+        shows fewer images than it'll end up with."""
+        try:
+            with open(log_path, newline="", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                fieldnames = reader.fieldnames or []
+                rows = list(reader)
+        except OSError:
+            return []
+
+        if "File Path" in fieldnames and "Filename Prefix" not in fieldnames:
+            seen = set()
+            images = []
+            for row in rows:
+                file_path = (row.get("File Path") or "").strip()
+                if not file_path:
+                    continue
+                found = Path(file_path)
+                if found.is_file() and found not in seen:
+                    seen.add(found)
+                    images.append(found)
+            images.sort()
+            return images
+
         comfyui_install_dir = self.settings.get("comfyui_install_dir")
         if not comfyui_install_dir:
             return []
         output_dir = Path(comfyui_install_dir) / "output"
-        _kind, prefixes = self._read_run_log_summary(log_path)
+        prefixes = [r["Filename Prefix"] for r in rows if r.get("Filename Prefix")]
 
         seen = set()
         images = []
@@ -1876,8 +1908,6 @@ class MainWindow(QMainWindow):
         self.create_grid_button.setEnabled(current is not None)
         self.results_loading_label.setVisible(False)
         if current is None:
-            return
-        if not self.settings.get("comfyui_install_dir"):
             return
         log_path = Path(current.data(Qt.UserRole))
         image_paths = self._resolve_run_images(log_path)
@@ -2003,21 +2033,38 @@ class MainWindow(QMainWindow):
         )
 
     def _prompt_text_for_image(self, log_path, image_path):
-        """Best-effort prompt text for one output image, matched by its
-        Filename Prefix in the run's log. Only available for a "Test Run"
-        log (run_test.py/lora_test.py) whose sweep had more than one
-        prompt - those are the only case that records a "Prompt" column at
-        all; a single/default-prompt run has nothing to look up, and a
-        "Variations Queue" log (rerun_prompts_comfyui.py) only records its
-        *source* CSV's bare filename (no directory), too fragile to safely
-        re-resolve back to prompt text. Returns None in every case with
-        nothing to show."""
+        """Best-effort prompt text for one output image. A Generations-tab
+        log (its own "File Path" column, no "Filename Prefix") matches by
+        exact File Path - one row per image - and shows Cleaned Prompt
+        plus its Content Rating, since both are recorded right there.
+        Otherwise, matched by Filename Prefix in the run's log: only
+        available for a "Test Run" log (run_test.py/lora_test.py) whose
+        sweep had more than one prompt - those are the only case that
+        records a "Prompt" column at all; a single/default-prompt run has
+        nothing to look up, and a "Variations Queue" log
+        (rerun_prompts_comfyui.py) only records its *source* CSV's bare
+        filename (no directory), too fragile to safely re-resolve back to
+        prompt text. Returns None in every case with nothing to show."""
         if log_path is None:
             return None
         try:
             with open(log_path, newline="", encoding="utf-8") as f:
                 reader = csv.DictReader(f)
-                if "Prompt" not in (reader.fieldnames or []):
+                fieldnames = reader.fieldnames or []
+
+                if "File Path" in fieldnames and "Filename Prefix" not in fieldnames:
+                    image_path_str = str(Path(image_path))
+                    for row in reader:
+                        if (row.get("File Path") or "").strip() != image_path_str:
+                            continue
+                        text = (row.get("Cleaned Prompt") or "").strip()
+                        rating = (row.get("Content Rating") or "").strip()
+                        if text and rating:
+                            return f"{text} [{rating}]"
+                        return text or None
+                    return None
+
+                if "Prompt" not in fieldnames:
                     return None
                 image_stem = Path(image_path).stem
                 for row in reader:
@@ -2238,11 +2285,37 @@ class MainWindow(QMainWindow):
             "Reprocess rows that already have a Cleaned Prompt (default: skip them)."
         )
         options_row.addWidget(self.generations_overwrite_check)
+        edit_cleaning_prompt_button = QPushButton("Edit Cleaning Prompt...")
+        edit_cleaning_prompt_button.setToolTip(
+            "View/edit the instructions sent to Ollama for rewriting each prompt "
+            "(comfy_prompt_tools.clean_prompts.SYSTEM_PROMPT) - not a prompt itself, "
+            "the direction the model follows to clean one."
+        )
+        edit_cleaning_prompt_button.clicked.connect(self._edit_cleaning_prompt)
+        options_row.addWidget(edit_cleaning_prompt_button)
         left_layout.addLayout(options_row)
 
-        self.generations_queue_button = QPushButton("Queue for Extraction/Cleaning/Rating")
-        self.generations_queue_button.clicked.connect(self._on_queue_generations_clicked)
-        left_layout.addWidget(self.generations_queue_button)
+        buttons_row = QHBoxLayout()
+        self.generations_extract_button = QPushButton("Extract")
+        self.generations_extract_button.setToolTip(
+            "Just reads embedded generation metadata into a CSV - no Ollama, no ComfyUI."
+        )
+        self.generations_extract_button.clicked.connect(self._on_generations_extract_clicked)
+        buttons_row.addWidget(self.generations_extract_button)
+        self.generations_clean_button = QPushButton("Extract + Clean + Rate")
+        self.generations_clean_button.setToolTip(
+            "Extracts, then rewrites and content-rates each prompt via Ollama (comfy_prompt_tools.extract_and_clean)."
+        )
+        self.generations_clean_button.clicked.connect(self._on_generations_extract_clean_rate_clicked)
+        buttons_row.addWidget(self.generations_clean_button)
+        self.generations_queue_button = QPushButton("Extract + Clean + Rate + Queue")
+        self.generations_queue_button.setToolTip(
+            "Same as Extract + Clean + Rate, then submits each cleaned prompt to ComfyUI "
+            "using the workflow selected on the Testing tab."
+        )
+        self.generations_queue_button.clicked.connect(self._on_generations_extract_clean_rate_queue_clicked)
+        buttons_row.addWidget(self.generations_queue_button)
+        left_layout.addLayout(buttons_row)
 
         self.generations_log_view = QPlainTextEdit()
         self.generations_log_view.setReadOnly(True)
@@ -2298,6 +2371,60 @@ class MainWindow(QMainWindow):
             models = [CLEAN_PROMPTS_DEFAULT_MODEL] + models
         self.generations_model_combo.addItems(models)
         self.generations_model_combo.setCurrentText(CLEAN_PROMPTS_DEFAULT_MODEL)
+
+    def _edit_cleaning_prompt(self):
+        """View/edit clean_prompts.py's text-rewrite system prompt - the
+        base instructions (clean_prompts.json, checked in) and the
+        optional personal addendum (clean_prompts.local.json, gitignored)
+        that gets appended to it, same base+local split as everywhere
+        else in comfy-prompt-tools. This is the *cleaning* instructions,
+        not a prompt to be cleaned - the content-rating rubric appended
+        on top of this at request time (see clean_prompts._combined_
+        system_prompt) isn't shown here, since that's rate_prompts.py's
+        own file to edit, not this one's."""
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Edit Cleaning Prompt")
+        dialog.setMinimumSize(640, 560)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            "Instructions comfy_prompt_tools.clean_prompts.py sends to Ollama for "
+            "rewriting each prompt - not a prompt itself, the direction the model "
+            "follows to clean one. Base is checked into the repo; Local is your own "
+            "optional personal addition, appended after it and never committed."
+        ))
+
+        base_text = clean_prompts.load_text(clean_prompts.SYSTEM_PROMPT_CONFIG_PATH, "system_prompt_base")
+        local_text = clean_prompts.load_local_text(clean_prompts.SYSTEM_PROMPT_CONFIG_PATH, "system_prompt_addendum")
+
+        layout.addWidget(QLabel("Base (clean_prompts.json):"))
+        base_edit = QPlainTextEdit(base_text)
+        layout.addWidget(base_edit, 2)
+
+        layout.addWidget(QLabel("Local addendum (clean_prompts.local.json) - optional, appended after Base:"))
+        local_edit = QPlainTextEdit(local_text)
+        layout.addWidget(local_edit, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        base_path = clean_prompts.SYSTEM_PROMPT_CONFIG_PATH
+        base_config = json.loads(base_path.read_text(encoding="utf-8"))
+        base_config["system_prompt_base"] = base_edit.toPlainText()
+        base_path.write_text(json.dumps(base_config, indent=2), encoding="utf-8")
+
+        local_path = local_path_for(base_path)
+        local_config = json.loads(local_path.read_text(encoding="utf-8")) if local_path.is_file() else {}
+        local_config["system_prompt_addendum"] = local_edit.toPlainText()
+        local_path.write_text(json.dumps(local_config, indent=2), encoding="utf-8")
+
+        # Take effect immediately in this running session, same as Edit LoRA Rules...
+        clean_prompts.SYSTEM_PROMPT = clean_prompts._combined_system_prompt(clean_prompts.build_system_prompt())
+        self.generations_log_view.appendPlainText(f"Saved cleaning prompt to {base_path.name} / {local_path.name}")
 
     def _resolve_generations_images(self, directory):
         root = Path(directory)
@@ -2356,35 +2483,132 @@ class MainWindow(QMainWindow):
             item.data(Qt.UserRole), nav_paths=nav_paths, nav_index=self.generations_images_view.row(item)
         )
 
-    def _on_queue_generations_clicked(self):
+    def _generations_directory_or_warn(self):
         directory = self.generations_dir_edit.text().strip()
         if not directory or not Path(directory).is_dir():
             QMessageBox.warning(self, "No directory", "Choose a valid directory to scan first.")
-            return
+            return None
+        return directory
 
+    def _set_generations_buttons_enabled(self, enabled):
+        self.generations_extract_button.setEnabled(enabled)
+        self.generations_clean_button.setEnabled(enabled)
+        self.generations_queue_button.setEnabled(enabled)
+
+    def _start_generations_thread(self, run_func, arg):
+        self._set_generations_buttons_enabled(False)
+        self.generations_log_view.clear()
+        self._generations_thread = TestRunnerThread(run_func, arg, self)
+        self._generations_thread.log_line.connect(self.generations_log_view.appendPlainText)
+        self._generations_thread.finished_ok.connect(self._on_generations_finished_ok)
+        self._generations_thread.finished_error.connect(self._on_generations_finished_error)
+        self._generations_thread.start()
+
+    def _on_generations_extract_clicked(self):
+        """Metadata extraction only - extract_image_prompts.extract_all()
+        takes the directory directly, so no JSON config file is needed at
+        all for this one (unlike the other two buttons)."""
+        directory = self._generations_directory_or_warn()
+        if directory is None:
+            return
+        self._start_generations_thread(extract_image_prompts.extract_all, directory)
+
+    def _on_generations_extract_clean_rate_clicked(self):
+        directory = self._generations_directory_or_warn()
+        if directory is None:
+            return
         config = {
             "directory": directory,
             "model": self.generations_model_combo.currentText().strip() or CLEAN_PROMPTS_DEFAULT_MODEL,
             "overwrite": self.generations_overwrite_check.isChecked(),
         }
         GUI_GENERATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH)
 
-        self.generations_queue_button.setEnabled(False)
-        self.generations_log_view.clear()
-        self._generations_thread = TestRunnerThread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH, self)
-        self._generations_thread.log_line.connect(self.generations_log_view.appendPlainText)
-        self._generations_thread.finished_ok.connect(self._on_generations_finished_ok)
-        self._generations_thread.finished_error.connect(self._on_generations_finished_error)
-        self._generations_thread.start()
+    def _on_generations_extract_clean_rate_queue_clicked(self):
+        directory = self._generations_directory_or_warn()
+        if directory is None:
+            return
+
+        workflow_name = self.workflow_combo.currentText().strip()
+        if not workflow_name:
+            QMessageBox.warning(self, "No workflow selected", "Pick a source workflow on the Testing tab first.")
+            return
+        comfyui_install_dir = self.settings.get("comfyui_install_dir")
+        if not comfyui_install_dir:
+            QMessageBox.warning(self, "ComfyUI folder not set", "Set your ComfyUI installation folder in Settings first.")
+            return
+        workflow_path = Path(comfyui_install_dir) / "user" / "default" / "workflows" / workflow_name
+        if not workflow_path.is_file():
+            QMessageBox.warning(self, "Workflow not found", f"File not found:\n{workflow_path}")
+            return
+
+        config = {
+            "directory": directory,
+            "model": self.generations_model_combo.currentText().strip() or CLEAN_PROMPTS_DEFAULT_MODEL,
+            "overwrite": self.generations_overwrite_check.isChecked(),
+            "submit_to_comfyui": True,
+            "workflow": str(workflow_path),
+            "server": self.settings["server"],
+        }
+        if not self._confirm_json(
+            "Confirm queue job", config,
+            "About to extract, clean, rate, and queue this directory's images to ComfyUI:", "Queue",
+        ):
+            return
+        GUI_GENERATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
+        self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH)
 
     def _on_generations_finished_ok(self):
-        self.generations_queue_button.setEnabled(True)
+        self._set_generations_buttons_enabled(True)
         self.generations_log_view.appendPlainText("Done.")
         self._refresh_generations_gallery()
+        self._write_generations_results_log(self.generations_dir_edit.text().strip())
 
     def _on_generations_finished_error(self, message):
-        self.generations_queue_button.setEnabled(True)
+        self._set_generations_buttons_enabled(True)
         self.generations_log_view.appendPlainText(f"Failed: {message}")
         QMessageBox.critical(self, "Generations failed", message)
+
+    def _write_generations_results_log(self, directory):
+        """After a Generations run finishes, writes a log into
+        funkytown-testing-harness's runs/ folder (same folder run_test.py/
+        lora_test.py/rerun_prompts_comfyui.py write to) so it shows up in
+        the Results tab too, browsable the same way. Unlike those, this
+        pipeline never renders anything - the images already exist - so
+        each row's own File Path is recorded directly instead of a
+        Filename Prefix to glob for a future render."""
+        if not directory:
+            return
+        csv_paths = sorted(Path(directory).rglob("*-prompts.csv"))
+        if not csv_paths:
+            return
+
+        fieldnames = ["File Name", "File Path", "Positive Prompt", "Cleaned Prompt", "Content Rating", "Rating Reason"]
+        rows_out = []
+        seen_paths = set()
+        for csv_path in csv_paths:
+            try:
+                with open(csv_path, newline="", encoding="utf-8") as f:
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        file_path = (row.get("File Path") or "").strip()
+                        if not file_path or file_path in seen_paths or not Path(file_path).is_file():
+                            continue
+                        seen_paths.add(file_path)
+                        rows_out.append({field: row.get(field, "") for field in fieldnames})
+            except OSError:
+                continue
+
+        if not rows_out:
+            return
+
+        RUNS_DIR.mkdir(exist_ok=True)
+        name = Path(directory).name or "generations"
+        log_path = RUNS_DIR / f"{name}_{datetime.datetime.now():%y%m%d_%H%M%S}.csv"
+        with open(log_path, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows_out)
 
         self._refresh_results_list()
