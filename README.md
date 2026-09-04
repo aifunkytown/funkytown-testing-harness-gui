@@ -62,10 +62,11 @@ project root - see "Launcher exe" below.
 ## What it does
 
 The window has four top-level tabs: **Testing** (build and run a
-model-comparison or LoRA-weight-sweep config), **Variations** (generate
-prompt variations for one CSV row via Ollama), **Results** (browse
-previous runs' output images), and **Generations** (extract, clean, and
-content-rate a whole directory of images via Ollama).
+model-comparison or LoRA-weight-sweep config), **Generations** (extract,
+clean, and content-rate a whole directory of images via Ollama, optionally
+queuing the result to ComfyUI), **Variations** (generate prompt variations
+for one CSV row via Ollama), and **Results** (browse previous runs' output
+images - including Generations tab runs).
 
 - **First-run setup** - until a ComfyUI installation folder is configured,
   startup tries to infer one from a running ComfyUI server's own launch
@@ -183,6 +184,75 @@ the window doesn't freeze. Progress streams into the tab's own collapsible
 expand; the window grows to fit it, so it's never clipped or hidden), the
 same messages the CLI would print.
 
+### Generations tab
+
+Scans a directory of images (`comfy_prompt_tools.extract_and_clean`) and
+runs some or all of the extract -> clean -> rate -> queue pipeline on it,
+via three buttons of increasing scope:
+
+- **Extract** - just reads each image's embedded generation metadata into
+  a CSV (`extract_image_prompts.py`) - no Ollama, no ComfyUI.
+- **Extract + Clean + Rate** - extracts, then rewrites each prompt for a
+  modern text-to-image model and content-rates it, both in the same Ollama
+  call per image (`comfy-prompt-tools`'s `clean_prompts.py`). An image
+  with no metadata at all is described directly from the image itself
+  instead of being skipped.
+- **Extract + Clean + Rate + Queue** - all of the above, then submits each
+  cleaned prompt to ComfyUI using the workflow selected on the Testing
+  tab, after a confirmation dialog showing the exact job about to run.
+
+**Directory** plus **Browse...** choose what to scan (recursively, same as
+`extract_image_prompts.py`) - the right side fills with a lazy-loaded
+preview grid of every image found there, same loading behavior as the
+Results tab's gallery; double-click one to view it full size, with the
+same **&lt;**/**&gt;** step-through navigation. **Ollama model** defaults
+to `clean_prompts.py`'s own default (independent of the Variations tab's
+model choice); **Overwrite** reprocesses rows that already have a Cleaned
+Prompt instead of skipping them (only meaningful for the two Clean
+buttons). **Edit Cleaning Prompt...** opens the instructions sent to
+Ollama for the *rewrite* itself (not a prompt to be cleaned, the direction
+the model follows to clean one) - Base (`clean_prompts.json`, checked in)
+and Local addendum (`clean_prompts.local.json`, gitignored, your own
+personal instructions appended after Base) are both shown and editable;
+Save writes both files and takes effect immediately in the running app,
+no restart needed - same pattern as **Edit LoRA Rules...** on the Testing
+tab.
+
+**Clean existing CSV(s)** below skips extraction entirely, for a CSV (or
+several) you already have: **Browse...** picks one or more files, adding
+them to the list of already-selected CSVs rather than replacing it - click
+Browse again to pick more without losing what's already there; the preview
+gallery fills with every image any of the listed CSVs reference, via their
+own File Path column. **Clear** empties the selection. **Prompts...**
+opens a popup listing every row's raw Positive Prompt text across all
+selected CSVs (never Cleaned Prompt, even if one's already there - this is
+what `clean_prompts.py` is about to read, not what it may have already
+produced) - edit a row's text inline or click its **✕** to drop that row
+from cleaning entirely; **Save (overrides CSV files)** asks for
+confirmation (naming exactly how many rows will be edited/removed across
+how many files) before writing the changes back to the source CSV file(s)
+in place - a hard-to-reverse action, so nothing is written until that
+confirmation is accepted, and Cancel at either the popup or the
+confirmation makes no changes at all. **Clean Selected CSV(s)** rewrites
+and content-rates them in place, same Ollama call as above; **Clean +
+Queue Selected CSV(s)** also submits the result to ComfyUI, same
+workflow/confirmation as Extract + Clean + Rate + Queue. Ollama model and
+Overwrite above are shared with the directory buttons.
+
+Any of the five buttons runs in the background, streaming progress into
+the collapsible **Log** below; the preview gallery refreshes once it
+finishes (the images themselves don't change, just their CSV metadata, but
+this confirms the run completed). Every Clean/Queue action here always
+saves its CSV with every column kept (`--verbose`, regardless of the
+`clean_prompts.py` CLI's own trimmed-by-default behavior) - the Results
+tab integration below depends on File Path surviving, and trimming would
+silently break it. A run also writes its own log into
+`funkytown-testing-harness`'s `runs/` folder, so it shows up in the
+**Results** tab too, browsable the same way as a Model/LoRA test run -
+except its images already existed going in (nothing was rendered by
+*this* pipeline), so they're resolved directly by the path each row
+already recorded rather than a filename pattern to search for.
+
 ### Variations tab
 
 Front end for `comfy_prompt_tools.generate_prompt_variations` - pick a CSV
@@ -245,13 +315,16 @@ A split view: the left side lists every logged run from
 actually started (parsed from its log filename's own timestamp, not the
 file's last-modified time - a long-running test's log keeps getting
 rewritten as it goes, so mtime alone can put it out of order relative to a
-shorter run that started later but finished first) - both Model/LoRA
-test runs (`run_test.py`/`lora_test.py`) and Variations runs that were
-queued to ComfyUI (a "Queue Generated Variations" run writes its own log
-there too, alongside the Testing tab's, instead of the single shared
-`rerun_log.csv` `rerun_prompts_comfyui.py` normally overwrites on every
-invocation - so each queue run gets its own permanent entry here). Each
-entry shows how many prompts it queued, with its own checkbox (unchecked by
+shorter run that started later but finished first) - Model/LoRA test runs
+(`run_test.py`/`lora_test.py`), Variations runs that were queued to
+ComfyUI (a "Queue Generated Variations" run writes its own log there too,
+alongside the Testing tab's, instead of the single shared `rerun_log.csv`
+`rerun_prompts_comfyui.py` normally overwrites on every invocation - so
+each queue run gets its own permanent entry here), and Generations tab
+runs (see above - images already existed going in, so nothing was
+rendered; each row's own File Path is used to find them instead of a
+filename pattern). Each entry shows how many prompts it queued (or, for a
+Generations run, how many images), with its own checkbox (unchecked by
 default) plus a **Select All** above the list for bulk actions - currently
 just **Delete selected** below, which now deletes every checked run's log
 and output images in one confirmation instead of one at a time. Checking a
@@ -276,9 +349,10 @@ the last - and a **Save & Close** button that saves a copy elsewhere
 (defaulting to the same folder the run's own images live in) and closes the
 viewer once the save actually completes; cancelling the save dialog leaves
 the viewer open. The viewer also shows that image's prompt text underneath, when
-its run's log recorded one - only a multi-prompt Model/LoRA sweep does (a
-single/default-prompt run, or a Variations Queue run, has nothing recorded
-to show, so it says so instead). **Refresh** re-scans the folder and stays on whichever run
+its run's log recorded one - a multi-prompt Model/LoRA sweep does, and so
+does a Generations run (shown with its Content Rating alongside, e.g.
+`... [PG-13]`); a single/default-prompt run or a Variations Queue run has
+nothing recorded to show, so it says so instead. **Refresh** re-scans the folder and stays on whichever run
 was already selected, just bringing its image grid up to date (also done
 automatically after Run Test or Queue Generated Variations finishes);
 **Create Grid** builds a labeled
@@ -305,27 +379,6 @@ all. Each image's filename also starts with a zero-padded queue number, so
 sorting by name (including in the thumbnail grid here) always matches the
 order things were actually queued in, regardless of how model/LoRA names
 alphabetize.
-
-### Generations tab
-
-Scans a directory of images (`comfy_prompt_tools.extract_and_clean`) and
-runs the full extract -> clean -> rate pipeline on it: each image's
-embedded generation metadata is read, its prompt is rewritten for a modern
-text-to-image model, and content-rated - all via a local Ollama model, in
-one call per image (see `comfy-prompt-tools`'s `clean_prompts.py`). An
-image with no metadata at all is described directly from the image itself
-instead of being skipped. **Directory** plus **Browse...** choose what to
-scan (recursively, same as `extract_image_prompts.py`) - the right side
-fills with a lazy-loaded preview grid of every image found there, same
-loading behavior as the Results tab's gallery; double-click one to view it
-full size, with the same **&lt;**/**&gt;** step-through navigation. **Ollama
-model** defaults to `clean_prompts.py`'s own default (independent of the
-Variations tab's model choice); **Overwrite** reprocesses rows that already
-have a Cleaned Prompt instead of skipping them. **Queue for Extraction/
-Cleaning/Rating** runs the pipeline in the background, streaming progress
-into the collapsible **Log** below - the preview gallery refreshes once it
-finishes (the images themselves don't change, just their CSV metadata, but
-this confirms the run completed against the same directory).
 
 ## Launcher exe
 
