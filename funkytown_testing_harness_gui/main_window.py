@@ -2275,6 +2275,15 @@ class MainWindow(QMainWindow):
         self.generations_model_combo.setEditable(True)  # in case Ollama's unreachable or the wanted model isn't pulled yet
         self._populate_generations_model_dropdown()
         options_row.addWidget(self.generations_model_combo, 1)
+        options_row.addWidget(QLabel("Prompt style:"))
+        self.generations_prompt_config_combo = QComboBox()
+        self.generations_prompt_config_combo.setToolTip(
+            "Which prompt-directions file to build the cleaning instructions from - different models can respond "
+            "very differently to the same wording, so each one can have its own file "
+            "(comfy_prompt_tools/clean_prompts*.json) instead of sharing one."
+        )
+        self._populate_generations_prompt_config_dropdown()
+        options_row.addWidget(self.generations_prompt_config_combo)
         self.generations_overwrite_check = QCheckBox("Overwrite")
         self.generations_overwrite_check.setToolTip(
             "Reprocess rows that already have a Cleaned Prompt (default: skip them)."
@@ -2434,6 +2443,42 @@ class MainWindow(QMainWindow):
             models = [CLEAN_PROMPTS_DEFAULT_MODEL] + models
         self.generations_model_combo.addItems(models)
         self.generations_model_combo.setCurrentText(CLEAN_PROMPTS_DEFAULT_MODEL)
+
+    def _populate_generations_prompt_config_dropdown(self):
+        """Discovers every clean_prompts*.json prompt-directions file next to
+        clean_prompts.py itself (clean_prompts.json plus any per-model ones
+        like clean_prompts_qwen.json), skipping the gitignored *.local.json
+        override files - those get merged in automatically by clean_prompts.
+        build_system_prompt(), never picked directly. clean_prompts.json
+        itself is always listed first, labeled "Default", regardless of
+        glob order."""
+        config_dir = clean_prompts.SYSTEM_PROMPT_CONFIG_PATH.parent
+        paths = sorted(
+            p for p in config_dir.glob("clean_prompts*.json") if not p.name.endswith(".local.json")
+        )
+        default_path = clean_prompts.SYSTEM_PROMPT_CONFIG_PATH
+        paths.sort(key=lambda p: p != default_path)  # default_path first, others alphabetical after
+
+        self.generations_prompt_config_combo.clear()
+        for path in paths:
+            if path == default_path:
+                label = "Default"
+            else:
+                # clean_prompts_qwen.json -> "Qwen"
+                stem = path.stem
+                suffix = stem[len("clean_prompts"):].lstrip("_") or stem
+                label = suffix.replace("_", " ").title()
+            self.generations_prompt_config_combo.addItem(label, str(path))
+
+    def _selected_generations_prompt_config(self):
+        """Path (as str) of the prompt-directions file currently chosen in
+        the Prompt style dropdown, or None for the default clean_prompts.json
+        - clean_prompts.run()/clean_all() already fall back to that default
+        when prompt_config is omitted, so the written config just skips the
+        key entirely in that case rather than special-casing "Default" here
+        too."""
+        path = self.generations_prompt_config_combo.currentData()
+        return path if path and path != str(clean_prompts.SYSTEM_PROMPT_CONFIG_PATH) else None
 
     def _edit_cleaning_prompt(self):
         """View/edit clean_prompts.py's text-rewrite system prompt - the
@@ -2619,6 +2664,9 @@ class MainWindow(QMainWindow):
             "overwrite": self.generations_overwrite_check.isChecked(),
             "verbose": True,  # keep File Path etc. - the Results tab log needs it, see _write_generations_results_log_from_csvs
         }
+        prompt_config = self._selected_generations_prompt_config()
+        if prompt_config:
+            config["prompt_config"] = prompt_config
         GUI_GENERATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
         self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH, ("directory", directory))
 
@@ -2640,6 +2688,9 @@ class MainWindow(QMainWindow):
             "workflow": str(workflow_path),
             "server": self.settings["server"],
         }
+        prompt_config = self._selected_generations_prompt_config()
+        if prompt_config:
+            config["prompt_config"] = prompt_config
         if not self._confirm_json(
             "Confirm queue job", config,
             "About to extract, clean, rate, and queue this directory's images to ComfyUI:", "Queue",
@@ -2793,6 +2844,9 @@ class MainWindow(QMainWindow):
             "overwrite": self.generations_overwrite_check.isChecked(),
             "verbose": True,  # keep File Path etc. - the Results tab log needs it, see _write_generations_results_log_from_csvs
         }
+        prompt_config = self._selected_generations_prompt_config()
+        if prompt_config:
+            config["prompt_config"] = prompt_config
         GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
         self._start_generations_thread(clean_prompts.run, GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH, ("csvs", csv_paths))
 
@@ -2813,6 +2867,9 @@ class MainWindow(QMainWindow):
             "workflow": str(workflow_path),
             "server": self.settings["server"],
         }
+        prompt_config = self._selected_generations_prompt_config()
+        if prompt_config:
+            config["prompt_config"] = prompt_config
         if not self._confirm_json(
             "Confirm queue job", config, "About to clean and queue these CSV(s) to ComfyUI:", "Queue",
         ):
