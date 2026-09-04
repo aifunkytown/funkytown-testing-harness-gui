@@ -2284,6 +2284,15 @@ class MainWindow(QMainWindow):
         )
         self._populate_generations_prompt_config_dropdown()
         options_row.addWidget(self.generations_prompt_config_combo)
+        options_row.addWidget(QLabel("Image style:"))
+        self.generations_style_config_combo = QComboBox()
+        self.generations_style_config_combo.setToolTip(
+            "Visual style to write prompts for - independent of Prompt style (which model directions to use): "
+            "only has an effect on a prompt style whose base text opts in via a {STYLE} placeholder "
+            "(comfy_prompt_tools/style_*.json). Defaults to Realistic."
+        )
+        self._populate_generations_style_config_dropdown()
+        options_row.addWidget(self.generations_style_config_combo)
         self.generations_overwrite_check = QCheckBox("Overwrite")
         self.generations_overwrite_check.setToolTip(
             "Reprocess rows that already have a Cleaned Prompt (default: skip them)."
@@ -2297,6 +2306,14 @@ class MainWindow(QMainWindow):
         )
         edit_cleaning_prompt_button.clicked.connect(self._edit_cleaning_prompt)
         options_row.addWidget(edit_cleaning_prompt_button)
+        edit_style_button = QPushButton("Edit Style...")
+        edit_style_button.setToolTip(
+            "View/edit the visual-style instructions for the selected Image style "
+            "(comfy_prompt_tools/style_*.json's \"style_adds\") - only takes effect on a "
+            "Prompt style that opts in via a {STYLE} placeholder."
+        )
+        edit_style_button.clicked.connect(self._edit_style_config)
+        options_row.addWidget(edit_style_button)
         left_layout.addLayout(options_row)
         # Shared by both sections below - Ollama model / Overwrite apply to
         # whichever button is actually clicked.
@@ -2450,8 +2467,8 @@ class MainWindow(QMainWindow):
         like clean_prompts_qwen.json), skipping the gitignored *.local.json
         override files - those get merged in automatically by clean_prompts.
         build_system_prompt(), never picked directly. clean_prompts.json
-        itself is always listed first, labeled "Default", regardless of
-        glob order."""
+        itself is always listed first, labeled "Gemma" (the model it's
+        actually tuned for), regardless of glob order."""
         config_dir = clean_prompts.SYSTEM_PROMPT_CONFIG_PATH.parent
         paths = sorted(
             p for p in config_dir.glob("clean_prompts*.json") if not p.name.endswith(".local.json")
@@ -2462,13 +2479,39 @@ class MainWindow(QMainWindow):
         self.generations_prompt_config_combo.clear()
         for path in paths:
             if path == default_path:
-                label = "Default"
+                label = "Gemma"
             else:
                 # clean_prompts_qwen.json -> "Qwen"
                 stem = path.stem
                 suffix = stem[len("clean_prompts"):].lstrip("_") or stem
                 label = suffix.replace("_", " ").title()
             self.generations_prompt_config_combo.addItem(label, str(path))
+
+    def _populate_generations_style_config_dropdown(self):
+        """Discovers every style_*.json visual-style file next to
+        clean_prompts.py (style_realism.json, style_anime.json, ...),
+        skipping gitignored *.local.json overrides - those get merged in
+        automatically the same way a prompt config's addendum is.
+        style_realism.json is always listed first, labeled "Realistic",
+        since it's clean_prompts.DEFAULT_STYLE_CONFIG_PATH - the style a
+        placeholder-using prompt config falls back to when nothing else is
+        chosen."""
+        config_dir = clean_prompts.SYSTEM_PROMPT_CONFIG_PATH.parent
+        paths = sorted(
+            p for p in config_dir.glob("style_*.json") if not p.name.endswith(".local.json")
+        )
+        default_path = clean_prompts.DEFAULT_STYLE_CONFIG_PATH
+        paths.sort(key=lambda p: p != default_path)  # default_path (realism) first, others alphabetical after
+
+        self.generations_style_config_combo.clear()
+        for path in paths:
+            if path == default_path:
+                label = "Realistic"
+            else:
+                # style_oil_painting.json -> "Oil Painting"
+                suffix = path.stem[len("style"):].lstrip("_") or path.stem
+                label = suffix.replace("_", " ").title()
+            self.generations_style_config_combo.addItem(label, str(path))
 
     def _selected_generations_prompt_config(self):
         """Path (as str) of the prompt-directions file currently chosen in
@@ -2479,6 +2522,15 @@ class MainWindow(QMainWindow):
         too."""
         path = self.generations_prompt_config_combo.currentData()
         return path if path and path != str(clean_prompts.SYSTEM_PROMPT_CONFIG_PATH) else None
+
+    def _selected_generations_style_config(self):
+        """Path (as str) of the style file currently chosen in the Image
+        style dropdown, or None for the default style_realism.json - same
+        "skip the key when it's the default" convention as
+        _selected_generations_prompt_config(). Only has any effect on a
+        Prompt style whose base text opts in via a {STYLE} placeholder."""
+        path = self.generations_style_config_combo.currentData()
+        return path if path and path != str(clean_prompts.DEFAULT_STYLE_CONFIG_PATH) else None
 
     def _edit_cleaning_prompt(self):
         """View/edit clean_prompts.py's text-rewrite system prompt - the
@@ -2533,6 +2585,62 @@ class MainWindow(QMainWindow):
         # Take effect immediately in this running session, same as Edit LoRA Rules...
         clean_prompts.SYSTEM_PROMPT = clean_prompts._combined_system_prompt(clean_prompts.build_system_prompt())
         self.generations_log_view.appendPlainText(f"Saved cleaning prompt to {base_path.name} / {local_path.name}")
+
+    def _edit_style_config(self):
+        """View/edit whichever style_<name>.json is currently selected in
+        the Image style dropdown - its "style_adds" text (checked in) and
+        an optional personal addendum (style_<name>.local.json, gitignored),
+        same base+local split as _edit_cleaning_prompt() and everywhere
+        else in comfy-prompt-tools. This only has any visible effect once
+        it's substituted into a Prompt style that opts in via a {STYLE}
+        placeholder (see clean_prompts_qwen.json) - a Prompt style with no
+        placeholder ignores the selected style entirely."""
+        config_path = Path(
+            self.generations_style_config_combo.currentData() or clean_prompts.DEFAULT_STYLE_CONFIG_PATH
+        )
+        style_label = self.generations_style_config_combo.currentText() or "Realistic"
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Edit Style ({style_label})")
+        dialog.setMinimumSize(640, 420)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(QLabel(
+            f"Visual-style instructions substituted into a {{STYLE}} placeholder inside a "
+            f"Prompt style's base text (see clean_prompts_qwen.json) - only takes effect on a "
+            f"Prompt style that actually has the placeholder. Base is checked into the repo; "
+            f"Local is your own optional personal addition, appended after it and never committed."
+        ))
+
+        base_text = clean_prompts.load_text(config_path, "style_adds")
+        local_text = clean_prompts.load_local_text(config_path, "style_adds")
+
+        layout.addWidget(QLabel(f"Base ({config_path.name}):"))
+        base_edit = QPlainTextEdit(base_text)
+        layout.addWidget(base_edit, 2)
+
+        layout.addWidget(QLabel(f"Local addendum ({local_path_for(config_path).name}) - optional, appended after Base:"))
+        local_edit = QPlainTextEdit(local_text)
+        layout.addWidget(local_edit, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if dialog.exec() != QDialog.Accepted:
+            return
+
+        base_config = json.loads(config_path.read_text(encoding="utf-8"))
+        base_config["style_adds"] = base_edit.toPlainText()
+        config_path.write_text(json.dumps(base_config, indent=2), encoding="utf-8")
+
+        local_path = local_path_for(config_path)
+        local_text_value = local_edit.toPlainText()
+        if local_text_value:
+            local_config = json.loads(local_path.read_text(encoding="utf-8")) if local_path.is_file() else {}
+            local_config["style_adds"] = local_text_value
+            local_path.write_text(json.dumps(local_config, indent=2), encoding="utf-8")
+        self.generations_log_view.appendPlainText(f"Saved style to {config_path.name}")
 
     def _resolve_generations_images(self, directory):
         root = Path(directory)
@@ -2667,6 +2775,9 @@ class MainWindow(QMainWindow):
         prompt_config = self._selected_generations_prompt_config()
         if prompt_config:
             config["prompt_config"] = prompt_config
+        style_config = self._selected_generations_style_config()
+        if style_config:
+            config["style_config"] = style_config
         GUI_GENERATIONS_RUN_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
         self._start_generations_thread(extract_and_clean.run, GUI_GENERATIONS_RUN_CONFIG_PATH, ("directory", directory))
 
@@ -2691,6 +2802,9 @@ class MainWindow(QMainWindow):
         prompt_config = self._selected_generations_prompt_config()
         if prompt_config:
             config["prompt_config"] = prompt_config
+        style_config = self._selected_generations_style_config()
+        if style_config:
+            config["style_config"] = style_config
         if not self._confirm_json(
             "Confirm queue job", config,
             "About to extract, clean, rate, and queue this directory's images to ComfyUI:", "Queue",
@@ -2847,6 +2961,9 @@ class MainWindow(QMainWindow):
         prompt_config = self._selected_generations_prompt_config()
         if prompt_config:
             config["prompt_config"] = prompt_config
+        style_config = self._selected_generations_style_config()
+        if style_config:
+            config["style_config"] = style_config
         GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH.write_text(json.dumps(config, indent=2), encoding="utf-8")
         self._start_generations_thread(clean_prompts.run, GUI_GENERATIONS_CLEAN_CSV_CONFIG_PATH, ("csvs", csv_paths))
 
@@ -2870,6 +2987,9 @@ class MainWindow(QMainWindow):
         prompt_config = self._selected_generations_prompt_config()
         if prompt_config:
             config["prompt_config"] = prompt_config
+        style_config = self._selected_generations_style_config()
+        if style_config:
+            config["style_config"] = style_config
         if not self._confirm_json(
             "Confirm queue job", config, "About to clean and queue these CSV(s) to ComfyUI:", "Queue",
         ):
