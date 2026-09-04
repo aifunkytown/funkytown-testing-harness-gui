@@ -2481,34 +2481,40 @@ class MainWindow(QMainWindow):
         return path if path and path != str(clean_prompts.SYSTEM_PROMPT_CONFIG_PATH) else None
 
     def _edit_cleaning_prompt(self):
-        """View/edit clean_prompts.py's text-rewrite system prompt - the
-        base instructions (clean_prompts.json, checked in) and the
-        optional personal addendum (clean_prompts.local.json, gitignored)
+        """View/edit clean_prompts.py's text-rewrite system prompt for
+        whichever file the Prompt style dropdown currently has selected
+        (Default -> clean_prompts.json, or a per-model file like
+        clean_prompts_qwen.json) - the base instructions (checked in) and
+        the optional personal addendum (<name>.local.json, gitignored)
         that gets appended to it, same base+local split as everywhere
         else in comfy-prompt-tools. This is the *cleaning* instructions,
         not a prompt to be cleaned - the content-rating rubric appended
         on top of this at request time (see clean_prompts._combined_
         system_prompt) isn't shown here, since that's rate_prompts.py's
         own file to edit, not this one's."""
+        config_path = Path(self.generations_prompt_config_combo.currentData() or clean_prompts.SYSTEM_PROMPT_CONFIG_PATH)
+        style_label = self.generations_prompt_config_combo.currentText() or "Default"
+
         dialog = QDialog(self)
-        dialog.setWindowTitle("Edit Cleaning Prompt")
+        dialog.setWindowTitle(f"Edit Cleaning Prompt ({style_label})")
         dialog.setMinimumSize(640, 560)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel(
-            "Instructions comfy_prompt_tools.clean_prompts.py sends to Ollama for "
-            "rewriting each prompt - not a prompt itself, the direction the model "
-            "follows to clean one. Base is checked into the repo; Local is your own "
-            "optional personal addition, appended after it and never committed."
+            f"Instructions comfy_prompt_tools.clean_prompts.py sends to Ollama for "
+            f"rewriting each prompt under the \"{style_label}\" prompt style - not a "
+            f"prompt itself, the direction the model follows to clean one. Base is "
+            f"checked into the repo; Local is your own optional personal addition, "
+            f"appended after it and never committed."
         ))
 
-        base_text = clean_prompts.load_text(clean_prompts.SYSTEM_PROMPT_CONFIG_PATH, "system_prompt_base")
-        local_text = clean_prompts.load_local_text(clean_prompts.SYSTEM_PROMPT_CONFIG_PATH, "system_prompt_addendum")
+        base_text = clean_prompts.load_text(config_path, "system_prompt_base")
+        local_text = clean_prompts.load_local_text(config_path, "system_prompt_addendum")
 
-        layout.addWidget(QLabel("Base (clean_prompts.json):"))
+        layout.addWidget(QLabel(f"Base ({config_path.name}):"))
         base_edit = QPlainTextEdit(base_text)
         layout.addWidget(base_edit, 2)
 
-        layout.addWidget(QLabel("Local addendum (clean_prompts.local.json) - optional, appended after Base:"))
+        layout.addWidget(QLabel(f"Local addendum ({local_path_for(config_path).name}) - optional, appended after Base:"))
         local_edit = QPlainTextEdit(local_text)
         layout.addWidget(local_edit, 1)
 
@@ -2520,19 +2526,23 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
-        base_path = clean_prompts.SYSTEM_PROMPT_CONFIG_PATH
-        base_config = json.loads(base_path.read_text(encoding="utf-8"))
+        base_config = json.loads(config_path.read_text(encoding="utf-8"))
         base_config["system_prompt_base"] = base_edit.toPlainText()
-        base_path.write_text(json.dumps(base_config, indent=2), encoding="utf-8")
+        config_path.write_text(json.dumps(base_config, indent=2), encoding="utf-8")
 
-        local_path = local_path_for(base_path)
+        local_path = local_path_for(config_path)
         local_config = json.loads(local_path.read_text(encoding="utf-8")) if local_path.is_file() else {}
         local_config["system_prompt_addendum"] = local_edit.toPlainText()
         local_path.write_text(json.dumps(local_config, indent=2), encoding="utf-8")
 
-        # Take effect immediately in this running session, same as Edit LoRA Rules...
-        clean_prompts.SYSTEM_PROMPT = clean_prompts._combined_system_prompt(clean_prompts.build_system_prompt())
-        self.generations_log_view.appendPlainText(f"Saved cleaning prompt to {base_path.name} / {local_path.name}")
+        # clean_all()/run() resolve their system prompt fresh from
+        # prompt_config on every call (see resolve_system_prompts()), so
+        # the next run already picks this up regardless of style - this
+        # only refreshes the module-level default used by a direct
+        # clean_prompt()/describe_image() call with no override.
+        if config_path == clean_prompts.SYSTEM_PROMPT_CONFIG_PATH:
+            clean_prompts.SYSTEM_PROMPT = clean_prompts._combined_system_prompt(clean_prompts.build_system_prompt())
+        self.generations_log_view.appendPlainText(f"Saved cleaning prompt to {config_path.name} / {local_path.name}")
 
     def _resolve_generations_images(self, directory):
         root = Path(directory)
