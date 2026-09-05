@@ -25,10 +25,12 @@ class _PromptRowWidget(QWidget):
         self.row_num = row_num
         layout = QHBoxLayout(self)
         layout.setContentsMargins(6, 2, 6, 2)
+        row_label = QLabel(f"Row {row_num}")
+        row_label.setFixedWidth(55)
+        layout.addWidget(row_label)
         self.text_edit = QPlainTextEdit(text)
         self.text_edit.setLineWrapMode(QPlainTextEdit.WidgetWidth)
         self.text_edit.setFixedHeight(70)  # ~3 lines - long prompts scroll within the row instead of growing it
-        self.text_edit.setToolTip(f"Row {row_num}")
         layout.addWidget(self.text_edit, 1)
         self.remove_button = QToolButton()
         self.remove_button.setText("✕")
