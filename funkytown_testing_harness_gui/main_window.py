@@ -1150,11 +1150,20 @@ class MainWindow(QMainWindow):
         dropdown reflects whatever's actually installed - falling back to just
         DEFAULT_MODEL if Ollama isn't reachable or has nothing pulled yet. The
         combo box stays editable regardless, so a model not in the list can
-        still be typed in by hand."""
+        still be typed in by hand. Also wired to a Refresh button (Ollama
+        might not have been running yet when this first ran at startup, or a
+        new model got pulled since) - clears first so a re-run doesn't just
+        keep appending duplicates, and restores whatever was already
+        selected/typed rather than silently resetting to the default."""
+        current = self.variations_model_combo.currentText()
         models = generate_prompt_variations.list_ollama_models()
         if generate_prompt_variations.DEFAULT_MODEL not in models:
             models = [generate_prompt_variations.DEFAULT_MODEL] + models
+        self.variations_model_combo.clear()
         self.variations_model_combo.addItems(models)
+        if current:
+            self.variations_model_combo.setCurrentText(current)
+            return
         self.variations_model_combo.setCurrentText(generate_prompt_variations.DEFAULT_MODEL)
 
     def _build_variations_tab(self):
@@ -1270,6 +1279,13 @@ class MainWindow(QMainWindow):
         self.variations_model_combo.setEditable(True)  # in case Ollama's unreachable or the wanted model isn't pulled yet
         self._populate_ollama_model_dropdown()
         settings_row.addWidget(self.variations_model_combo, 1)
+        variations_model_refresh_button = QPushButton("Refresh")
+        variations_model_refresh_button.setToolTip(
+            "Re-check Ollama for newly-pulled models, or pick up ones missed because Ollama wasn't "
+            "running yet when this list was first built."
+        )
+        variations_model_refresh_button.clicked.connect(self._populate_ollama_model_dropdown)
+        settings_row.addWidget(variations_model_refresh_button)
         layout.addLayout(settings_row)
 
         generate_row = QHBoxLayout()
@@ -2319,6 +2335,13 @@ class MainWindow(QMainWindow):
         self.generations_model_combo.setEditable(True)  # in case Ollama's unreachable or the wanted model isn't pulled yet
         self._populate_generations_model_dropdown()
         options_row.addWidget(self.generations_model_combo, 1)
+        generations_model_refresh_button = QPushButton("Refresh")
+        generations_model_refresh_button.setToolTip(
+            "Re-check Ollama for newly-pulled models, or pick up ones missed because Ollama wasn't "
+            "running yet when this list was first built."
+        )
+        generations_model_refresh_button.clicked.connect(self._populate_generations_model_dropdown)
+        options_row.addWidget(generations_model_refresh_button)
         options_row.addWidget(QLabel("Prompt style:"))
         self.generations_prompt_config_combo = QComboBox()
         self.generations_prompt_config_combo.setToolTip(
@@ -2498,11 +2521,19 @@ class MainWindow(QMainWindow):
     def _populate_generations_model_dropdown(self):
         """Same idea as _populate_ollama_model_dropdown (Variations tab), but
         defaulting to clean_prompts.MODEL instead of generate_prompt_
-        variations.DEFAULT_MODEL - each script has its own default model."""
+        variations.DEFAULT_MODEL - each script has its own default model.
+        Also wired to a Refresh button - see that function's docstring for
+        why (Ollama down at startup, or a new model pulled since) and why
+        this clears first and restores the prior selection."""
+        current = self.generations_model_combo.currentText()
         models = generate_prompt_variations.list_ollama_models()
         if CLEAN_PROMPTS_DEFAULT_MODEL not in models:
             models = [CLEAN_PROMPTS_DEFAULT_MODEL] + models
+        self.generations_model_combo.clear()
         self.generations_model_combo.addItems(models)
+        if current:
+            self.generations_model_combo.setCurrentText(current)
+            return
         self.generations_model_combo.setCurrentText(CLEAN_PROMPTS_DEFAULT_MODEL)
 
     def _populate_generations_prompt_config_dropdown(self):
