@@ -42,6 +42,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTabWidget,
     QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -1247,9 +1249,13 @@ class MainWindow(QMainWindow):
         layout.addLayout(mode_row)
 
         layout.addWidget(QLabel(
-            "Aspects (from prompt_aspect_vocab.json - check one or more):"
+            "Aspects (from prompt_aspect_vocab.json - check one or more; expand an "
+            "aspect to narrow it to specific allowed values, or leave every value "
+            "checked to allow all of them):"
         ))
-        self.variations_aspect_list = QListWidget()
+        self.variations_aspect_list = QTreeWidget()
+        self.variations_aspect_list.setHeaderHidden(True)
+        self.variations_aspect_list.itemChanged.connect(self._on_variations_aspect_item_changed)
         self._populate_variations_aspect_list()
         layout.addWidget(self.variations_aspect_list, 1)
 
@@ -1295,6 +1301,19 @@ class MainWindow(QMainWindow):
         return page
 
     def _populate_variations_aspect_list(self):
+        """Each aspect is a checkable, expandable root - checking it checks
+        every one of its allowed values as a child (see
+        _on_variations_aspect_item_changed), so by default a checked
+        aspect behaves exactly as it always did: every value is eligible.
+        Unchecking specific values instead of the whole aspect narrows it
+        to just the ones still checked (_build_variations_config reads
+        this back out as an aspect_values override); unchecking the root
+        itself still excludes the aspect entirely, same as before - Qt
+        auto-tristates the root back to Unchecked on its own once every
+        child is unchecked, so "exclude the whole aspect" and "manually
+        uncheck every one of its values" naturally end up in the same
+        state. An aspect with no listed values (empty vocab entry) gets no
+        children, same as a plain checkbox."""
         self.variations_aspect_list.clear()
         vocab, _random_exclude, _multi_select, explicit_aspects = generate_prompt_variations.load_vocab(
             generate_prompt_variations.DEFAULT_VOCAB_PATH
@@ -1304,11 +1323,42 @@ class MainWindow(QMainWindow):
             if hide_explicit and aspect_name in explicit_aspects:
                 continue
             label = aspect_name + (" (explicit)" if aspect_name in explicit_aspects else "")
-            item = QListWidgetItem(label)
-            item.setData(Qt.UserRole, aspect_name)
-            item.setFlags(item.flags() | Qt.ItemIsUserCheckable)
-            item.setCheckState(Qt.Unchecked)
-            self.variations_aspect_list.addItem(item)
+            item = QTreeWidgetItem([label])
+            item.setData(0, Qt.UserRole, aspect_name)
+            item.setFlags(item.flags() | Qt.ItemIsUserCheckable | Qt.ItemIsAutoTristate)
+            item.setCheckState(0, Qt.Unchecked)
+            for value in vocab.get(aspect_name) or []:
+                child = QTreeWidgetItem([value])
+                child.setFlags(child.flags() | Qt.ItemIsUserCheckable)
+                child.setCheckState(0, Qt.Unchecked)
+                item.addChild(child)
+            self.variations_aspect_list.addTopLevelItem(item)
+
+    def _on_variations_aspect_item_changed(self, item, _column):
+        """Propagates a root aspect's checkbox to every one of its values -
+        the child->root direction (partial/full/no selection) is handled
+        automatically by Qt itself via Qt.ItemIsAutoTristate on the root,
+        so this only ever needs to handle root->children. Guards against
+        Qt.PartiallyChecked specifically because that state only ever
+        arises *from* a child changing (auto-tristate recomputing the
+        root), never from a direct user click on the root itself - forcing
+        children to match would fight the very edit that just produced it.
+        The Checked/Unchecked cases below can also fire as a side effect of
+        that same auto-tristate recompute (e.g. manually checking an
+        aspect's last remaining unchecked value), but re-applying a state
+        every child already has is a harmless no-op, so no extra guard is
+        needed to tell a direct click apart from that."""
+        if item.parent() is not None:
+            return
+        new_state = item.checkState(0)
+        if new_state == Qt.PartiallyChecked:
+            return
+        self.variations_aspect_list.blockSignals(True)
+        try:
+            for i in range(item.childCount()):
+                item.child(i).setCheckState(0, new_state)
+        finally:
+            self.variations_aspect_list.blockSignals(False)
 
     def _on_variations_mode_changed(self, _checked):
         named_mode = self.variations_named_radio.isChecked()
@@ -1556,11 +1606,24 @@ class MainWindow(QMainWindow):
             config["prompt_overrides"] = prompt_overrides
 
         if self.variations_named_radio.isChecked():
-            chosen = [
-                self.variations_aspect_list.item(i).data(Qt.UserRole)
-                for i in range(self.variations_aspect_list.count())
-                if self.variations_aspect_list.item(i).checkState() == Qt.Checked
-            ]
+            chosen = []
+            aspect_values = {}
+            for i in range(self.variations_aspect_list.topLevelItemCount()):
+                item = self.variations_aspect_list.topLevelItem(i)
+                state = item.checkState(0)
+                if state == Qt.Unchecked:
+                    continue
+                aspect_name = item.data(0, Qt.UserRole)
+                chosen.append(aspect_name)
+                if state == Qt.PartiallyChecked:
+                    # Some, but not all, of this aspect's values are still
+                    # checked - narrow it to just those via aspect_values
+                    # rather than the vocab file's full list. A fully-checked
+                    # aspect needs no override; that's already the default.
+                    aspect_values[aspect_name] = [
+                        item.child(j).text(0) for j in range(item.childCount())
+                        if item.child(j).checkState(0) == Qt.Checked
+                    ]
             extra = [a.strip() for a in self.variations_extra_aspect_edit.text().split(",") if a.strip()]
             aspects = chosen + extra
             if not aspects:
@@ -1570,6 +1633,8 @@ class MainWindow(QMainWindow):
                 )
                 return None
             config["aspect"] = ", ".join(aspects)
+            if aspect_values:
+                config["aspect_values"] = aspect_values
         else:
             config["random_aspects"] = self.variations_random_spin.value()
 
