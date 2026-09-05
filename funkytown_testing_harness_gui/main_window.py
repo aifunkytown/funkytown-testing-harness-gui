@@ -2543,13 +2543,28 @@ class MainWindow(QMainWindow):
         not a prompt to be cleaned - the content-rating rubric appended
         on top of this at request time (see clean_prompts._combined_
         system_prompt) isn't shown here, since that's rate_prompts.py's
-        own file to edit, not this one's."""
+        own file to edit, not this one's.
+
+        If the selected prompt config actually uses a {STYLE} placeholder,
+        this also shows/edits the currently-selected Image style's own
+        style_adds text (same content _edit_style_config() edits) in a
+        third section below Base/Local, saved together in the same Save
+        click - so switching to a placeholder-using style like Qwen
+        already surfaces its style text right here instead of needing the
+        separate Edit Style... button to see or change it. The Base
+        editor above still shows the literal "{STYLE}" token, not the
+        substituted style text - the two are edited and saved as the
+        separate files they actually are, just from one dialog."""
         config_path = Path(self.generations_prompt_config_combo.currentData() or clean_prompts.SYSTEM_PROMPT_CONFIG_PATH)
         style_label = self.generations_prompt_config_combo.currentText() or "Default"
 
+        base_text = clean_prompts.load_text(config_path, "system_prompt_base")
+        local_text = clean_prompts.load_local_text(config_path, "system_prompt_addendum")
+        uses_style_placeholder = clean_prompts.STYLE_PLACEHOLDER in base_text
+
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit Cleaning Prompt ({style_label})")
-        dialog.setMinimumSize(640, 560)
+        dialog.setMinimumSize(640, 560 if not uses_style_placeholder else 700)
         layout = QVBoxLayout(dialog)
         layout.addWidget(QLabel(
             f"Instructions comfy_prompt_tools.clean_prompts.py sends to Ollama for "
@@ -2559,9 +2574,6 @@ class MainWindow(QMainWindow):
             f"appended after it and never committed."
         ))
 
-        base_text = clean_prompts.load_text(config_path, "system_prompt_base")
-        local_text = clean_prompts.load_local_text(config_path, "system_prompt_addendum")
-
         layout.addWidget(QLabel(f"Base ({config_path.name}):"))
         base_edit = QPlainTextEdit(base_text)
         layout.addWidget(base_edit, 2)
@@ -2569,6 +2581,23 @@ class MainWindow(QMainWindow):
         layout.addWidget(QLabel(f"Local addendum ({local_path_for(config_path).name}) - optional, appended after Base:"))
         local_edit = QPlainTextEdit(local_text)
         layout.addWidget(local_edit, 1)
+
+        style_path = style_edit = style_local_edit = None
+        if uses_style_placeholder:
+            style_path = Path(
+                self.generations_style_config_combo.currentData() or clean_prompts.DEFAULT_STYLE_CONFIG_PATH
+            )
+            image_style_label = self.generations_style_config_combo.currentText() or "Realistic"
+            layout.addWidget(QLabel(
+                f"This prompt style uses the {{STYLE}} placeholder above - currently \"{image_style_label}\". "
+                f"Editing here is the same as Edit Style...:"
+            ))
+            layout.addWidget(QLabel(f"Style base ({style_path.name}):"))
+            style_edit = QPlainTextEdit(clean_prompts.load_text(style_path, "style_adds"))
+            layout.addWidget(style_edit, 1)
+            layout.addWidget(QLabel(f"Style local addendum ({local_path_for(style_path).name}) - optional:"))
+            style_local_edit = QPlainTextEdit(clean_prompts.load_local_text(style_path, "style_adds"))
+            layout.addWidget(style_local_edit, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
@@ -2587,14 +2616,31 @@ class MainWindow(QMainWindow):
         local_config["system_prompt_addendum"] = local_edit.toPlainText()
         local_path.write_text(json.dumps(local_config, indent=2), encoding="utf-8")
 
+        saved_names = f"{config_path.name} / {local_path.name}"
+        if uses_style_placeholder:
+            style_config = json.loads(style_path.read_text(encoding="utf-8"))
+            style_config["style_adds"] = style_edit.toPlainText()
+            style_path.write_text(json.dumps(style_config, indent=2), encoding="utf-8")
+
+            style_local_path = local_path_for(style_path)
+            style_local_text_value = style_local_edit.toPlainText()
+            if style_local_text_value:
+                style_local_config = (
+                    json.loads(style_local_path.read_text(encoding="utf-8")) if style_local_path.is_file() else {}
+                )
+                style_local_config["style_adds"] = style_local_text_value
+                style_local_path.write_text(json.dumps(style_local_config, indent=2), encoding="utf-8")
+            saved_names += f", {style_path.name}"
+
         # clean_all()/run() resolve their system prompt fresh from
-        # prompt_config on every call (see resolve_system_prompts()), so
-        # the next run already picks this up regardless of style - this
-        # only refreshes the module-level default used by a direct
-        # clean_prompt()/describe_image() call with no override.
+        # prompt_config/style_config on every call (see
+        # resolve_system_prompts()), so the next run already picks this up
+        # regardless of style - this only refreshes the module-level
+        # default used by a direct clean_prompt()/describe_image() call
+        # with no override.
         if config_path == clean_prompts.SYSTEM_PROMPT_CONFIG_PATH:
             clean_prompts.SYSTEM_PROMPT = clean_prompts._combined_system_prompt(clean_prompts.build_system_prompt())
-        self.generations_log_view.appendPlainText(f"Saved cleaning prompt to {config_path.name} / {local_path.name}")
+        self.generations_log_view.appendPlainText(f"Saved cleaning prompt to {saved_names}")
 
     def _edit_style_config(self):
         """View/edit whichever style_<name>.json is currently selected in
