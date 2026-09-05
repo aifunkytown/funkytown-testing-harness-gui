@@ -54,7 +54,7 @@ from comfy_prompt_tools.clean_prompts import MODEL as CLEAN_PROMPTS_DEFAULT_MODE
 from comfy_prompt_tools.local_config import load_named_list, local_path_for
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
-from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread
+from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread, fetch_ksampler_defaults
 from funkytown_testing_harness_gui.generations_csv_prompts_dialog import GenerationsCsvPromptsDialog
 from funkytown_testing_harness_gui.lora_weights_dialog import LoraWeightsDialog
 from funkytown_testing_harness_gui.model_config_dialog import ModelConfigDialog
@@ -104,6 +104,7 @@ class MainWindow(QMainWindow):
         self._results_gallery_anchor_row = None  # last plain-clicked row, for Shift+click range-check
         self._runner_thread = None
         self._ksampler_defaults = {}  # populated from the referenced workflow when possible
+        self._ksampler_defaults_workflow = None  # which workflow _ksampler_defaults was actually fetched for
         self._defaults_thread = None
         self._thumbnail_loaders = []  # in-flight ThumbnailLoaderThreads - kept alive here until each finishes
         self._generations_thumbnail_loaders = []  # same, for the Generations tab's own gallery
@@ -605,12 +606,52 @@ class MainWindow(QMainWindow):
         self._defaults_thread.start()
 
     def _on_ksampler_defaults_ready(self, defaults):
+        # self._defaults_thread is still the thread that just finished (the
+        # "already running" guard above never reassigns it out from under
+        # an in-flight fetch), so its own source_workflow is exactly which
+        # workflow this result belongs to - not necessarily the one
+        # currently selected, if the user has since changed it again.
         self._ksampler_defaults = defaults
+        self._ksampler_defaults_workflow = self._defaults_thread.source_workflow
         if defaults:
             self._log(f"KSampler defaults from workflow: {defaults}")
         else:
             self._log("Could not read KSampler defaults from the workflow - new configs will start from "
                        "cfg=1, steps=8, euler, beta.")
+
+    def _ksampler_defaults_for_current_workflow(self):
+        """self._ksampler_defaults, guaranteed to actually correspond to
+        whatever's currently selected in the workflow dropdown - the
+        background refresh (_refresh_ksampler_defaults, triggered on
+        startup and on every workflow selection) is normally already
+        done well before this is needed, but it can still be stale or
+        never-completed if the user opens the Add/Edit Model dialog before
+        it finishes, or in the narrow window right after switching
+        workflows while a fetch for the previous one was still in flight
+        (that one's own "don't start a second fetch while one's running"
+        guard just drops the new request rather than queuing it). Silently
+        using stale defaults there would show the wrong workflow's numbers
+        with no indication anything was off, so this blocks (briefly - a
+        live fetch, browser launch included) to fetch fresh right here
+        instead, only when the cached ones don't actually match."""
+        source_workflow = self.workflow_combo.currentText().strip()
+        if not source_workflow:
+            return {}
+        if self._ksampler_defaults_workflow == source_workflow:
+            return self._ksampler_defaults
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            defaults = fetch_ksampler_defaults(self.settings["server"], source_workflow)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self._ksampler_defaults = defaults
+        self._ksampler_defaults_workflow = source_workflow
+        if defaults:
+            self._log(f"KSampler defaults from workflow: {defaults}")
+        else:
+            self._log("Could not read KSampler defaults from the workflow - new configs will start from "
+                       "cfg=1, steps=8, euler, beta.")
+        return defaults
 
     def _on_tab_changed(self, index):
         # strip_loras only applies to run_test.py - lora_test.py's
@@ -676,12 +717,15 @@ class MainWindow(QMainWindow):
         """Shared by _on_add_model/_edit_model - wrapped in a try/except
         that surfaces the actual error instead of the dialog silently never
         appearing, since ModelConfigDialog's starting values are built from
-        live-fetched workflow data (self._ksampler_defaults) that can't be
-        fully validated ahead of time."""
+        live-fetched workflow data that can't be fully validated ahead of
+        time. Uses _ksampler_defaults_for_current_workflow() rather than
+        self._ksampler_defaults directly, so a background fetch that's
+        stale or still in flight for the currently-selected workflow can't
+        silently show a different workflow's numbers here."""
         try:
             return ModelConfigDialog(
                 model_name, self._sampler_names, self._schedulers, self,
-                initial_configs=initial_configs, defaults=self._ksampler_defaults,
+                initial_configs=initial_configs, defaults=self._ksampler_defaults_for_current_workflow(),
             )
         except Exception as e:
             QMessageBox.critical(
