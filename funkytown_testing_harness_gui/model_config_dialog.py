@@ -77,7 +77,13 @@ class KSamplerConfigRow:
         check = QCheckBox(label)
         spin = QSpinBox()
         spin.setRange(minimum, maximum)
-        spin.setValue(default)
+        # QSpinBox.setValue() takes a C int (32-bit signed) - a real
+        # workflow's seed is commonly randomized well past 2**31-1, and
+        # passing that straight through overflows before setRange()'s own
+        # clamping ever gets a chance to apply, raising OverflowError.
+        # Clamp here first since minimum/maximum are already guaranteed to
+        # fit (that's the whole point of setRange() above).
+        spin.setValue(max(minimum, min(maximum, default)))
         spin.setEnabled(False)
         check.toggled.connect(spin.setEnabled)
         row.addWidget(check)
