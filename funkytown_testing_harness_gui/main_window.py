@@ -2546,21 +2546,37 @@ class MainWindow(QMainWindow):
         own file to edit, not this one's.
 
         If the selected prompt config actually uses a {STYLE} placeholder,
-        this also shows/edits the currently-selected Image style's own
-        style_adds text (same content _edit_style_config() edits) in a
-        third section below Base/Local, saved together in the same Save
-        click - so switching to a placeholder-using style like Qwen
-        already surfaces its style text right here instead of needing the
-        separate Edit Style... button to see or change it. The Base
-        editor above still shows the literal "{STYLE}" token, not the
-        substituted style text - the two are edited and saved as the
-        separate files they actually are, just from one dialog."""
+        the Base editor shows it already filled in with the currently-
+        selected Image style's resolved text (not the raw "{STYLE}"
+        token) so it reads as one coherent prompt - and a third section
+        below Base/Local shows/edits that style's own style_adds text
+        (same content _edit_style_config() edits), saved together in the
+        same Save click. On Save, if the filled-in text is still present
+        verbatim in the (possibly edited) Base text, it's swapped back
+        for the placeholder before writing - so editing other guidelines
+        round-trips cleanly. Editing *inside* the filled-in style text
+        itself breaks that round-trip (the placeholder can't be recovered
+        from text that no longer matches), so that edit is saved as a
+        one-off literal in this prompt config instead of being reflected
+        back into the shared style file - edit the Style section below
+        instead if the change should apply to every config using this
+        style, not just this one."""
         config_path = Path(self.generations_prompt_config_combo.currentData() or clean_prompts.SYSTEM_PROMPT_CONFIG_PATH)
         style_label = self.generations_prompt_config_combo.currentText() or "Default"
 
         base_text = clean_prompts.load_text(config_path, "system_prompt_base")
         local_text = clean_prompts.load_local_text(config_path, "system_prompt_addendum")
         uses_style_placeholder = clean_prompts.STYLE_PLACEHOLDER in base_text
+
+        style_path = resolved_style_text = None
+        if uses_style_placeholder:
+            style_path = Path(
+                self.generations_style_config_combo.currentData() or clean_prompts.DEFAULT_STYLE_CONFIG_PATH
+            )
+            resolved_style_text = clean_prompts.resolve_style_adds(style_path)
+            display_base_text = base_text.replace(clean_prompts.STYLE_PLACEHOLDER, resolved_style_text)
+        else:
+            display_base_text = base_text
 
         dialog = QDialog(self)
         dialog.setWindowTitle(f"Edit Cleaning Prompt ({style_label})")
@@ -2575,22 +2591,20 @@ class MainWindow(QMainWindow):
         ))
 
         layout.addWidget(QLabel(f"Base ({config_path.name}):"))
-        base_edit = QPlainTextEdit(base_text)
+        base_edit = QPlainTextEdit(display_base_text)
         layout.addWidget(base_edit, 2)
 
         layout.addWidget(QLabel(f"Local addendum ({local_path_for(config_path).name}) - optional, appended after Base:"))
         local_edit = QPlainTextEdit(local_text)
         layout.addWidget(local_edit, 1)
 
-        style_path = style_edit = style_local_edit = None
+        style_edit = style_local_edit = None
         if uses_style_placeholder:
-            style_path = Path(
-                self.generations_style_config_combo.currentData() or clean_prompts.DEFAULT_STYLE_CONFIG_PATH
-            )
             image_style_label = self.generations_style_config_combo.currentText() or "Realistic"
             layout.addWidget(QLabel(
-                f"This prompt style uses the {{STYLE}} placeholder above - currently \"{image_style_label}\". "
-                f"Editing here is the same as Edit Style...:"
+                f"Base above already has the \"{image_style_label}\" style filled in where {{STYLE}} was. "
+                f"Editing its own text (not what surrounds it) here saves as a one-off just for this prompt - "
+                f"edit here instead to change it everywhere this style is used:"
             ))
             layout.addWidget(QLabel(f"Style base ({style_path.name}):"))
             style_edit = QPlainTextEdit(clean_prompts.load_text(style_path, "style_adds"))
@@ -2607,8 +2621,12 @@ class MainWindow(QMainWindow):
         if dialog.exec() != QDialog.Accepted:
             return
 
+        edited_base_text = base_edit.toPlainText()
+        if uses_style_placeholder and resolved_style_text in edited_base_text:
+            edited_base_text = edited_base_text.replace(resolved_style_text, clean_prompts.STYLE_PLACEHOLDER, 1)
+
         base_config = json.loads(config_path.read_text(encoding="utf-8"))
-        base_config["system_prompt_base"] = base_edit.toPlainText()
+        base_config["system_prompt_base"] = edited_base_text
         config_path.write_text(json.dumps(base_config, indent=2), encoding="utf-8")
 
         local_path = local_path_for(config_path)
