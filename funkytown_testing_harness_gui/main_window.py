@@ -123,6 +123,8 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
+        root.addLayout(self._build_global_status_bar())
+
         self.outer_tabs = QTabWidget()
         self.outer_tabs.addTab(self._build_testing_tab(), "Testing")
         self.outer_tabs.addTab(self._build_generations_tab(), "Generations")
@@ -234,11 +236,27 @@ class MainWindow(QMainWindow):
 
         toggle_button.toggled.connect(on_toggled)
 
-    # ---- top bar (name, server status, connectivity lights, settings) ----
+    # ---- global status bar (connectivity lights, settings) ---------------
 
     # How often ConnectivityCheckThread re-checks Ollama/ComfyUI reachability
     # in the background to refresh the status lights next to Settings.
     CONNECTIVITY_POLL_INTERVAL_MS = 4 * 60 * 1000
+
+    def _build_global_status_bar(self):
+        """Ollama/ComfyUI connectivity lights + Settings, placed above
+        outer_tabs (not inside any one tab's own top bar) so they're
+        visible no matter which tab is currently selected."""
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.ollama_status_dot = self._add_status_indicator(row, "Ollama")
+        self.comfy_status_dot = self._add_status_indicator(row, "ComfyUI")
+
+        settings_button = QPushButton("Settings...")
+        settings_button.clicked.connect(self._open_settings)
+        row.addWidget(settings_button)
+        return row
+
+    # ---- Testing tab's own top bar (name, server status) ------------------
 
     def _build_top_bar(self):
         row = QHBoxLayout()
@@ -248,13 +266,6 @@ class MainWindow(QMainWindow):
 
         self.server_label = QLabel()
         row.addWidget(self.server_label)
-
-        self.ollama_status_dot = self._add_status_indicator(row, "Ollama")
-        self.comfy_status_dot = self._add_status_indicator(row, "ComfyUI")
-
-        settings_button = QPushButton("Settings...")
-        settings_button.clicked.connect(self._open_settings)
-        row.addWidget(settings_button)
 
         self._update_server_label()
         return row
