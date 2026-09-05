@@ -56,6 +56,7 @@ from comfy_prompt_tools.clean_prompts import MODEL as CLEAN_PROMPTS_DEFAULT_MODE
 from comfy_prompt_tools.local_config import load_named_list, local_path_for
 from funkytown_testing_harness_gui import comfy_client
 from funkytown_testing_harness_gui.app_settings import load_settings, save_settings
+from funkytown_testing_harness_gui.connectivity_check_thread import ConnectivityCheckThread
 from funkytown_testing_harness_gui.ksampler_defaults_thread import KSamplerDefaultsThread, fetch_ksampler_defaults
 from funkytown_testing_harness_gui.generations_csv_prompts_dialog import GenerationsCsvPromptsDialog
 from funkytown_testing_harness_gui.lora_weights_dialog import LoraWeightsDialog
@@ -114,12 +115,15 @@ class MainWindow(QMainWindow):
         self._generations_pending_results_source = ("directory", "")  # set right before each generations run - see _start_generations_thread
         self._last_variations_output_paths = []  # set on each successful Generate Variations run
         self._last_test_config_path = None  # set on each successful Save Test.../Import Test...
+        self._connectivity_thread = None  # in-flight ConnectivityCheckThread, if any - see _run_connectivity_check
 
         self._build_menu_bar()
 
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
+
+        root.addLayout(self._build_global_status_bar())
 
         self.outer_tabs = QTabWidget()
         self.outer_tabs.addTab(self._build_testing_tab(), "Testing")
@@ -132,6 +136,7 @@ class MainWindow(QMainWindow):
         self._refresh_model_dropdown()
         self._refresh_lora_dropdown()
         self._refresh_sampler_options()
+        self._start_connectivity_poll()
 
         if not self.settings.get("comfyui_install_dir"):
             # Deferred so the main window is up and painted before a modal
@@ -231,7 +236,27 @@ class MainWindow(QMainWindow):
 
         toggle_button.toggled.connect(on_toggled)
 
-    # ---- top bar (name, server status, settings) -------------------------
+    # ---- global status bar (connectivity lights, settings) ---------------
+
+    # How often ConnectivityCheckThread re-checks Ollama/ComfyUI reachability
+    # in the background to refresh the status lights next to Settings.
+    CONNECTIVITY_POLL_INTERVAL_MS = 4 * 60 * 1000
+
+    def _build_global_status_bar(self):
+        """Ollama/ComfyUI connectivity lights + Settings, placed above
+        outer_tabs (not inside any one tab's own top bar) so they're
+        visible no matter which tab is currently selected."""
+        row = QHBoxLayout()
+        row.addStretch(1)
+        self.ollama_status_dot = self._add_status_indicator(row, "Ollama")
+        self.comfy_status_dot = self._add_status_indicator(row, "ComfyUI")
+
+        settings_button = QPushButton("Settings...")
+        settings_button.clicked.connect(self._open_settings)
+        row.addWidget(settings_button)
+        return row
+
+    # ---- Testing tab's own top bar (name, server status) ------------------
 
     def _build_top_bar(self):
         row = QHBoxLayout()
@@ -242,12 +267,48 @@ class MainWindow(QMainWindow):
         self.server_label = QLabel()
         row.addWidget(self.server_label)
 
-        settings_button = QPushButton("Settings...")
-        settings_button.clicked.connect(self._open_settings)
-        row.addWidget(settings_button)
-
         self._update_server_label()
         return row
+
+    def _add_status_indicator(self, row, label_text):
+        """Adds a small colored circle + label to `row` (e.g. a red/green
+        dot next to "Ollama") and returns the dot QLabel, so the caller can
+        recolor it later via _set_status_dot() as the real status changes -
+        starts red (unknown/not-yet-checked reads the same as down until
+        the first connectivity check completes)."""
+        dot = QLabel()
+        dot.setFixedSize(12, 12)
+        self._set_status_dot(dot, False)
+        row.addWidget(dot)
+        row.addWidget(QLabel(label_text))
+        return dot
+
+    def _set_status_dot(self, dot, is_up):
+        # Same green as the results gallery's check badge (_paint_check_badge)
+        # for visual consistency; red is its rough complement.
+        color = "#2ea043" if is_up else "#cf222e"
+        dot.setStyleSheet(f"background-color: {color}; border-radius: 6px;")
+
+    def _start_connectivity_poll(self):
+        """Kicks off the first Ollama/ComfyUI reachability check immediately,
+        then re-checks every CONNECTIVITY_POLL_INTERVAL_MS in the
+        background (see ConnectivityCheckThread) to keep the status lights
+        next to Settings current without the user needing to do anything."""
+        self._run_connectivity_check()
+        self._connectivity_timer = QTimer(self)
+        self._connectivity_timer.timeout.connect(self._run_connectivity_check)
+        self._connectivity_timer.start(self.CONNECTIVITY_POLL_INTERVAL_MS)
+
+    def _run_connectivity_check(self):
+        if self._connectivity_thread is not None and self._connectivity_thread.isRunning():
+            return  # a check is already in flight - this poll tick just waits for the next one
+        self._connectivity_thread = ConnectivityCheckThread(self.settings["server"], parent=self)
+        self._connectivity_thread.result_ready.connect(self._on_connectivity_result)
+        self._connectivity_thread.start()
+
+    def _on_connectivity_result(self, ollama_ok, comfy_ok):
+        self._set_status_dot(self.ollama_status_dot, ollama_ok)
+        self._set_status_dot(self.comfy_status_dot, comfy_ok)
 
     def _update_server_label(self):
         reachable = comfy_client.check_server_reachable(self.settings["server"])
@@ -259,6 +320,7 @@ class MainWindow(QMainWindow):
         if dialog.exec():
             self.settings = dialog.settings
             self._update_server_label()
+            self._run_connectivity_check()  # server may have changed - reflect it in the ComfyUI light right away
             self._refresh_workflow_list()
             self._refresh_model_dropdown()
             self._refresh_lora_dropdown()
